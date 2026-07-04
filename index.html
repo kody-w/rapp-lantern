@@ -1,0 +1,130 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>rapp-lantern — load any holographic organism</title>
+<style>
+ :root{ --bg:#0a0d13; --panel:#131924; --line:#26303f; --ink:#e8eef7; --muted:#8b98a9; --accent:#58a6ff; --accent2:#bc8cff; }
+ *{box-sizing:border-box}
+ body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,system-ui,Segoe UI,sans-serif;line-height:1.5}
+ body.drag{outline:3px dashed var(--accent);outline-offset:-8px}
+ .wrap{max-width:900px;margin:0 auto;padding:26px 18px 60px}
+ h1{margin:0 0 4px;font-size:24px;letter-spacing:-.3px}
+ .sub{color:var(--muted);font-size:14px;margin:0 0 18px}
+ a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+ code{font-family:ui-monospace,Menlo,monospace;font-size:.86em;background:#0a1018;border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+ .stage{position:relative;border:1px solid var(--line);border-radius:16px;background:#05080d;overflow:hidden;aspect-ratio:1/1;max-height:560px;margin:0 auto 8px;width:100%}
+ #player{display:none;width:100%;height:100%;border:0}
+ #drop{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--muted);text-align:center;padding:20px;cursor:pointer}
+ #drop .big{font-size:44px;opacity:.8}
+ #drop b{color:var(--ink)}
+ .meta{display:flex;align-items:baseline;gap:10px;min-height:24px;margin:2px 0 14px;flex-wrap:wrap}
+ .meta #title{font-weight:700;font-size:16px} .meta #born{color:var(--muted);font-size:13px} .meta #hint{color:var(--muted);font-size:12px;margin-left:auto}
+ .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 12px}
+ button,.btn{font:inherit;font-size:13px;cursor:pointer;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:9px;padding:8px 13px}
+ button:hover{border-color:var(--accent)} button:disabled{opacity:.4;cursor:default;border-color:var(--line)}
+ button.primary{background:#12365e;border-color:#2f6bb0;color:#cfe6ff}
+ input[type=text]{flex:1;min-width:180px;background:#05080d;border:1px solid var(--line);border-radius:9px;color:var(--ink);padding:8px 11px;font:inherit;font-size:13px}
+ textarea{width:100%;background:#05080d;border:1px solid var(--line);border-radius:9px;color:var(--ink);padding:9px 11px;font-family:ui-monospace,Menlo,monospace;font-size:12px;min-height:70px;resize:vertical}
+ .eggs{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 2px}
+ .eggs .egg{border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:12.5px;background:var(--panel);cursor:pointer}
+ .eggs .egg:hover{border-color:var(--accent2)}
+ .label{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:16px 0 6px}
+ .status{color:var(--muted);font-size:12.5px;min-height:18px;margin-top:8px}
+ .status.err{color:#ff8080}
+ details{margin-top:16px;border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:0 14px}
+ summary{cursor:pointer;padding:12px 0;color:var(--muted);font-size:13px}
+ details p{margin:0 0 12px;color:var(--muted);font-size:13px}
+</style></head>
+<body>
+<div class="wrap">
+ <h1>🔮 rapp-lantern</h1>
+ <p class="sub">The universal player. Drop in <b>any</b> holographic organism — an <code>.egg</code> — and orbit it, whatever its source or species. Nothing leaves your device; nothing phones home.</p>
+
+ <div class="stage">
+  <iframe id="player" title="hologram lantern"></iframe>
+  <div id="drop">
+   <div class="big">⬡</div>
+   <div><b>Drop an .egg here</b> — or choose one below</div>
+   <div style="font-size:12px">a weather sky, a moon, a crossbred hybrid, an original… any <code>hologram-cartridge/1.0</code></div>
+  </div>
+ </div>
+
+ <div class="meta">
+  <span id="title"></span><span id="born"></span>
+  <span id="hint">drag inside the frame to orbit · scroll to zoom</span>
+ </div>
+
+ <div class="bar">
+  <button class="primary" id="pick">📂 Load .egg…</button>
+  <button id="unload" disabled>× Unload</button>
+  <input type="file" id="file" accept=".egg,.json,application/json" style="display:none">
+  <input type="text" id="url" placeholder="…or paste an .egg URL (raw.githubusercontent.com/…)">
+  <button id="loadurl">Load URL</button>
+ </div>
+
+ <div class="label">example eggs — different sources, different species</div>
+ <div class="eggs" id="eggs"></div>
+
+ <details>
+  <summary>Paste an egg &amp; the format</summary>
+  <textarea id="paste" placeholder='paste a hologram-cartridge/1.0 JSON here'></textarea>
+  <div style="margin:8px 0 14px"><button id="loadpaste">Hatch pasted egg</button></div>
+  <p>An <code>.egg</code> is a <code>hologram-cartridge/1.0</code> JSON — a self-describing, content-addressed organism: a layered genome (form / surface / motion) the player interprets with zero per-species code. It renders in genuine 3D you drag to orbit. Make your own in the <a href="https://kody-w.github.io/rapp-static-apis/hologram/" target="_blank" rel="noopener">cabinet</a>, or convert any source into one.</p>
+ </details>
+
+ <div class="status" id="status"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const iframe = $('player'), drop = $('drop');
+const b64url = s => btoa(unescape(encodeURIComponent(s))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const status = (m, err) => { const s = $('status'); s.textContent = m || ''; s.className = 'status' + (err ? ' err' : ''); };
+
+function loadEgg(obj, name) {
+  if (!obj || obj.schema !== 'hologram-cartridge/1.0' || !obj.genome || !Array.isArray(obj.genome.layers)) {
+    status('That file is not a holographic organism (need a hologram-cartridge/1.0 .egg).', true); return;
+  }
+  iframe.src = 'player.html#' + b64url(JSON.stringify(obj));
+  iframe.style.display = 'block'; drop.style.display = 'none';
+  $('title').textContent = obj.title || name || 'organism';
+  $('born').textContent = (obj.born && obj.born.from) ? '· ' + obj.born.from : '';
+  $('unload').disabled = false;
+  status('Loaded ' + (obj.title || name || 'organism') + ' — drag inside the frame to look around.');
+}
+function unload() {
+  iframe.src = 'about:blank'; iframe.style.display = 'none'; drop.style.display = 'flex';
+  $('title').textContent = ''; $('born').textContent = ''; $('unload').disabled = true; status('');
+}
+async function loadFile(f) { try { loadEgg(JSON.parse(await f.text()), f.name.replace(/\.(egg|json)$/i, '')); } catch (e) { status('Could not read that egg: ' + e.message, true); } }
+
+$('pick').onclick = () => $('file').click();
+$('file').onchange = e => e.target.files[0] && loadFile(e.target.files[0]);
+$('unload').onclick = unload;
+drop.onclick = () => $('file').click();
+$('loadpaste').onclick = () => { try { loadEgg(JSON.parse($('paste').value), 'pasted'); } catch (e) { status('That is not valid JSON.', true); } };
+$('loadurl').onclick = async () => { const u = $('url').value.trim(); if (!u) return; status('fetching…'); try { const r = await fetch(u); loadEgg(await r.json(), u.split('/').pop()); } catch (e) { status('Could not fetch that URL (CORS or 404).', true); } };
+$('url').addEventListener('keydown', e => { if (e.key === 'Enter') $('loadurl').click(); });
+
+// drag & drop anywhere
+addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('drag'); });
+addEventListener('dragleave', e => { if (e.relatedTarget === null) document.body.classList.remove('drag'); });
+addEventListener('drop', e => { e.preventDefault(); document.body.classList.remove('drag'); const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+
+// example eggs
+const EGGS = [
+  ['🌙 weather sky (Huila)', 'weather-huila.egg'],
+  ['🌫️ fog-ring (San Francisco)', 'fog-sanfrancisco.egg'],
+  ['🌔 the moon', 'moon.egg'],
+  ['🧬 crossbred hybrid', 'cross-ushuaia-dubai.egg'],
+  ['🕷️ original (box-species)', 'original-frenzy.egg'],
+];
+const eggsEl = $('eggs');
+for (const [label, file] of EGGS) {
+  const b = document.createElement('button'); b.className = 'egg'; b.textContent = label;
+  b.onclick = async () => { status('loading ' + file + '…'); try { const r = await fetch('eggs/' + file); loadEgg(await r.json(), label); } catch (e) { status('Could not load ' + file, true); } };
+  eggsEl.appendChild(b);
+}
+// auto-load one so the lantern is never empty on first visit
+(async () => { try { const r = await fetch('eggs/' + EGGS[0][1]); loadEgg(await r.json(), EGGS[0][0]); } catch {} })();
+</script>
+</body></html>
