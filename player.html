@@ -1,6 +1,7 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>hologram player</title>
+<script>if(new URLSearchParams(location.search).get('embed')==='1')document.documentElement.classList.add('embed')</script>
 <style>
  *{box-sizing:border-box}
  body{margin:0;font-family:-apple-system,system-ui,Segoe UI,sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh}
@@ -12,20 +13,34 @@
  #meta{color:#8b949e;font-size:12px}
  #stage{position:relative;width:100%;max-width:480px}
  canvas{display:block;width:100%;border-radius:14px;background:#010409;border:1px solid #30363d}
- #canvas{cursor:grab;touch-action:none}
+ #canvas{cursor:grab;touch-action:pan-y}
  #canvas.dragging{cursor:grabbing}
+ #canvas:focus-visible{outline:3px solid #58a6ff;outline-offset:3px}
  #orbit-hint{position:absolute;top:10px;left:50%;transform:translateX(-50%);font-size:11px;font-weight:700;letter-spacing:.02em;color:#e6edf3;background:rgba(1,4,9,0.72);border:1px solid rgba(110,118,129,.45);padding:6px 10px;border-radius:999px;pointer-events:none;white-space:nowrap}
  #orbit-hint.hide{opacity:0}
  #verify{position:absolute;bottom:8px;right:10px;font-size:10px;font-family:ui-monospace,Menlo,monospace;color:#3fb950;background:rgba(1,4,9,0.75);padding:2px 7px;border-radius:20px;pointer-events:none}
  #verify.mismatch{color:#f0b429}
+ #view-controls{position:absolute;left:10px;bottom:10px;display:flex;gap:8px;align-items:flex-end}
+ #view-controls .dpad{display:grid;grid-template-columns:repeat(3,44px);grid-template-rows:repeat(3,44px);gap:3px}
+ #view-controls .zoom{display:flex;flex-direction:column;gap:4px}
+ #view-controls button{width:44px;height:44px;padding:0;border-color:rgba(110,118,129,.65);background:rgba(13,17,23,.88);font-size:17px;font-weight:700}
+ #view-controls button:hover,#view-controls button:focus-visible{background:#30363d;border-color:#58a6ff}
+ #view-up{grid-column:2;grid-row:1} #view-left{grid-column:1;grid-row:2} #view-reset{grid-column:2;grid-row:2}
+ #view-right{grid-column:3;grid-row:2} #view-down{grid-column:2;grid-row:3}
  #controls{width:100%;max-width:480px;margin-top:12px;display:flex;gap:8px;flex-wrap:wrap}
  button{font:inherit;font-size:12px;cursor:pointer;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:7px;padding:5px 12px}
  button:hover{background:#30363d}
+ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #58a6ff;outline-offset:2px}
  button.primary{background:#238636;border-color:#238636;color:#fff}
  button.primary:hover{filter:brightness(1.1)}
+ .button-link{display:inline-block;font-size:12px;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:7px;padding:5px 12px}
+ .button-link:hover{background:#30363d;text-decoration:none}
+ .button-link:focus-visible{outline:3px solid #58a6ff;outline-offset:2px}
  #load-row{width:100%;max-width:480px;margin-top:10px;display:flex;gap:6px}
  #load-row input{flex:1;background:#010409;border:1px solid #30363d;border-radius:7px;color:#e6edf3;padding:5px 9px;font:inherit;font-size:12px}
  #info-row{width:100%;max-width:480px;margin-top:8px;font-size:11px;color:#8b949e;display:flex;gap:14px;flex-wrap:wrap}
+ #player-status{width:100%;max-width:480px;min-height:18px;margin-top:6px;font-size:11px;color:#8b949e}
+ #player-status.err{color:#f85149}
  #json-area{width:100%;max-width:480px;margin-top:12px}
  #json-area textarea{width:100%;min-height:120px;background:#010409;border:1px solid #30363d;border-radius:8px;color:#e6edf3;padding:8px;font-family:ui-monospace,Menlo,monospace;font-size:11px;resize:vertical}
  #json-area .row{display:flex;gap:6px;margin-top:5px}
@@ -38,6 +53,15 @@
   #header{grid-column:1/-1;width:100%}
   #stage,#controls,#load-row,#info-row,#json-area,#qr-wrap{max-width:340px}
  }
+ html.embed,html.embed body{width:100%;height:100%;min-height:0;overflow:hidden}
+ html.embed #wrap{display:block;width:100%;height:100%;max-width:none;padding:0}
+ html.embed #header,html.embed #workbench{display:none}
+ html.embed #stage{width:100%;height:100%;max-width:none}
+ html.embed #canvas{width:100%;height:100%;border:0;border-radius:0}
+ @media(max-width:420px){
+  #view-controls{transform:scale(.88);transform-origin:left bottom}
+  #orbit-hint{top:7px}
+ }
 </style></head><body>
 <div id="wrap">
  <div id="header">
@@ -46,20 +70,33 @@
  </div>
 
  <div id="stage">
-  <canvas id="canvas" width="480" height="480"></canvas>
-  <div id="orbit-hint">drag to look around</div>
+  <canvas id="canvas" width="480" height="480" tabindex="0" role="img" aria-label="Interactive 3D organism. Use arrow keys to orbit, plus and minus to zoom, and Home to reset the view."></canvas>
+  <div id="orbit-hint">drag or use controls</div>
   <div id="verify" style="display:none"></div>
+  <div id="view-controls" role="group" aria-label="Organism view controls">
+   <div class="dpad">
+    <button id="view-up" data-view="up" aria-label="Orbit up">↑</button>
+    <button id="view-left" data-view="left" aria-label="Orbit left">←</button>
+    <button id="view-reset" data-view="reset" aria-label="Reset view">⌂</button>
+    <button id="view-right" data-view="right" aria-label="Orbit right">→</button>
+    <button id="view-down" data-view="down" aria-label="Orbit down">↓</button>
+   </div>
+   <div class="zoom">
+    <button data-view="zoom-in" aria-label="Zoom in">+</button>
+    <button data-view="zoom-out" aria-label="Zoom out">−</button>
+   </div>
+  </div>
  </div>
 
- <div style="display:flex;flex-direction:column;gap:0;flex:1;min-width:240px">
+ <div id="workbench" style="display:flex;flex-direction:column;gap:0;flex:1;min-width:240px">
   <div id="controls">
-   <button id="btn-dl">↓ download .json</button>
+   <button id="btn-dl">↓ download .egg</button>
    <button id="btn-link">copy link</button>
    <button id="btn-qr">QR</button>
-   <a href="index.html"><button>gallery →</button></a>
+    <a class="button-link" href="index.html">gallery →</a>
   </div>
   <div id="load-row">
-   <input id="cart-url" placeholder="cartridge URL or paste JSON…">
+   <input id="cart-url" aria-label="Cartridge URL or JSON" placeholder="cartridge URL or paste JSON…">
    <button class="primary" id="btn-load">load</button>
   </div>
   <div id="info-row">
@@ -67,11 +104,12 @@
    <span id="i-author"></span>
    <span id="i-id" class="mono"></span>
   </div>
+  <div id="player-status" role="status" aria-live="polite"></div>
   <div id="json-area">
-   <textarea id="cart-json" spellcheck="false" placeholder="paste hologram-cartridge/1.0 JSON here…"></textarea>
+   <textarea id="cart-json" aria-label="Cartridge JSON" spellcheck="false" placeholder="paste hologram-cartridge/1.0 JSON here…"></textarea>
    <div class="row">
     <button id="btn-apply">apply JSON</button>
-    <input type="file" id="file-in" accept=".json" style="display:none">
+    <input type="file" id="file-in" accept=".egg,.json,application/json" style="display:none">
     <button id="btn-file">open file…</button>
    </div>
   </div>
@@ -446,41 +484,180 @@ async function genomeId(genome) {
 function b64enc(s) { return btoa(unescape(encodeURIComponent(s))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 function b64dec(s) { s = String(s).replace(/-/g,'+').replace(/_/g,'/'); while(s.length%4)s+='='; return decodeURIComponent(escape(atob(s))); }
 
+/* ── Bounded cartridge gate ──────────────────────────────────────────────── */
+const MAX_CART_BYTES = 2 * 1024 * 1024;
+const LOAD_TIMEOUT_MS = 15000;
+
+function validateCartridge(cart) {
+  if (!cart || typeof cart !== 'object' || Array.isArray(cart))
+    throw new Error('Expected a hologram-cartridge/1.0 object.');
+  let nodes = 0;
+  const stack = new WeakSet();
+  const inspect = (value, depth) => {
+    if (depth > 32) throw new Error('Cartridge nesting is too deep.');
+    if (typeof value === 'number' && !Number.isFinite(value))
+      throw new Error('Cartridge numbers must be finite.');
+    if (!value || typeof value !== 'object') return;
+    if (stack.has(value)) throw new Error('Cartridge data cannot contain cycles.');
+    if (++nodes > 100000) throw new Error('Cartridge is too complex.');
+    stack.add(value);
+    for (const child of Array.isArray(value) ? value : Object.values(value)) inspect(child, depth + 1);
+    stack.delete(value);
+  };
+  inspect(cart, 0);
+  const serialized = JSON.stringify(cart);
+  if (new TextEncoder().encode(serialized).byteLength > MAX_CART_BYTES)
+    throw new Error('Cartridge exceeds the 2 MiB limit.');
+  if (cart.schema !== 'hologram-cartridge/1.0')
+    throw new Error('Expected schema hologram-cartridge/1.0.');
+  const layers = cart.genome && cart.genome.layers;
+  if (!Array.isArray(layers) || !layers.length || layers.length > 128)
+    throw new Error('Genome layers must contain between 1 and 128 entries.');
+  const numericKeys = new Set(['k', 'limbs', 'segments', 'body_r', 'limb_len', 'spikes', 'glow', 'opacity', 'breathe', 'drift', 'pulse', 'reach']);
+  for (const layer of layers) {
+    if (!layer || typeof layer !== 'object' || Array.isArray(layer) || typeof layer.role !== 'string')
+      throw new Error('Every genome layer needs a role.');
+    for (const key of numericKeys) {
+      if (layer[key] != null && (!Number.isFinite(layer[key]) || Math.abs(layer[key]) > 10000))
+        throw new Error(`Invalid numeric trait: ${key}.`);
+    }
+    if (layer.palette != null) {
+      if (!Array.isArray(layer.palette) || layer.palette.length > 64 ||
+          layer.palette.some(color => typeof color !== 'string' || !/^#[0-9a-f]{3}(?:[0-9a-f]{3})?$/i.test(color)))
+        throw new Error('Surface palettes must contain at most 64 hex colors.');
+    }
+  }
+  const windows = cart.genome.compose && cart.genome.compose.windows;
+  if (windows != null) {
+    if (!Array.isArray(windows)) throw new Error('Genome windows must be an array.');
+    let refs = 0;
+    for (const windowLayers of windows) {
+      if (!Array.isArray(windowLayers)) throw new Error('Each genome window must be an array.');
+      refs += windowLayers.length;
+      if (refs > 4096 || windowLayers.some(index => !Number.isInteger(index) || index < 0 || index >= layers.length))
+        throw new Error('Genome windows contain invalid layer references.');
+    }
+  }
+  return cart;
+}
+
+async function readBounded(response) {
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_CART_BYTES)
+    throw new Error('Cartridge exceeds the 2 MiB limit.');
+  if (!response.body || !response.body.getReader) {
+    const text = await response.text();
+    if (new TextEncoder().encode(text).byteLength > MAX_CART_BYTES)
+      throw new Error('Cartridge exceeds the 2 MiB limit.');
+    return text;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0, text = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value.byteLength;
+    if (bytes > MAX_CART_BYTES) {
+      await reader.cancel();
+      throw new Error('Cartridge exceeds the 2 MiB limit.');
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
 /* ── Default cartridge (Lumina) ────────────────────────────────────────────── */
 const DEFAULT_CART = {"schema":"hologram-cartridge/1.0","id":"d45a79d29e99","title":"Lumina","author":"@kody-w","born":{"coord":"0,0","from":"genesis"},"parents":[],"genome":{"layers":[{"role":"form","k":30,"shape":"blob","limbs":0,"segments":8,"symmetry":"radial","body_r":0.3,"limb_len":0},{"role":"surface","k":85,"palette":["#00ccff","#0088ff","#ffffff","#aaddff"],"pattern":"glow","glow":0.8,"opacity":0.85},{"role":"motion","k":60,"breathe":0.2,"drift":0.5,"pulse":0.8,"reach":0}],"compose":{"windows":[[0,1,2]],"loop":true}},"sig":""};
 
 /* ── State ────────────────────────────────────────────────────────────────── */
 let CART = null, RAF = null, T0 = null, _pmPort = null;
+let LOAD_SEQUENCE = 0, activeFetch = null;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
+const stageEl = document.getElementById('stage');
 const verEl = document.getElementById('verify');
 const orbitHintEl = document.getElementById('orbit-hint');
-const VIEW = { yaw: 0.85, pitch: 0.22, zoom: 1.0, dragging: false, autoOrbit: 0, userMoved: false, lastTs: null, pinch: 0 };
+const playerStatusEl = document.getElementById('player-status');
+const VIEW = { yaw: 0.85, pitch: 0.22, zoom: 1.0, dragging: false, autoOrbit: 0, userMoved: false, lastTs: null, activePointer: null };
 
-async function loadCart(cart) {
-  CART = cart;
-  // Verify genome id
+function setPlayerStatus(message, error = false) {
+  playerStatusEl.textContent = message || '';
+  playerStatusEl.className = error ? 'err' : '';
+  playerStatusEl.setAttribute('role', error ? 'alert' : 'status');
+}
+
+function beginLoad() {
+  LOAD_SEQUENCE += 1;
+  if (activeFetch) activeFetch.abort();
+  activeFetch = null;
+  return LOAD_SEQUENCE;
+}
+
+function describeCartridge(cart, got, match) {
+  const roles = {};
+  for (const layer of cart.genome.layers) roles[layer.role] = layer;
+  const form = roles.form || {}, surface = roles.surface || {}, motion = roles.motion || {};
+  const title = cart.title || 'Untitled organism';
+  const author = cart.author ? ` by ${cart.author}` : '';
+  const traits = [
+    form.shape || 'unknown form',
+    Number.isFinite(form.limbs) ? `${form.limbs} limbs` : '',
+    surface.pattern ? `${surface.pattern} surface` : '',
+    Number.isFinite(motion.breathe) && motion.breathe > 0 ? 'breathing motion' : ''
+  ].filter(Boolean).join(', ');
+  const trust = cart.id ? (match ? 'verified' : 'genome ID mismatch') : `computed ID ${got}`;
+  return `${title}${author}. ${traits}. ${trust}. Interactive 3D view: use arrow keys to orbit, plus and minus to zoom, and Home to reset.`;
+}
+
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  const cssWidth = Math.max(1, rect.width);
+  const cssHeight = Math.max(1, rect.height);
+  const maxPixels = 1600000;
+  const scale = Math.max(0.5, Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(maxPixels / (cssWidth * cssHeight))));
+  const width = Math.max(1, Math.round(cssWidth * scale));
+  const height = Math.max(1, Math.round(cssHeight * scale));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+}
+if ('ResizeObserver' in window) new ResizeObserver(resizeCanvas).observe(stageEl);
+else window.addEventListener('resize', resizeCanvas);
+requestAnimationFrame(resizeCanvas);
+
+async function loadCart(input, sequence = beginLoad()) {
+  const cart = validateCartridge(input);
   const got = await genomeId(cart.genome);
+  if (sequence !== LOAD_SEQUENCE) return null;
   const declared = cart.id || '';
   const match = !declared || got === declared;
+  CART = cart;
   verEl.style.display = 'block';
-  if (match) {
+  if (declared && match) {
     verEl.textContent = got + ' ✓';
+    verEl.className = 'mono';
+  } else if (!declared) {
+    verEl.textContent = got + ' (computed)';
     verEl.className = 'mono';
   } else {
     verEl.textContent = got + ' ≠ ' + declared.slice(0,12) + ' (remix)';
     verEl.className = 'mono mismatch';
   }
-  document.getElementById('i-title').textContent = cart.title || '';
+  const titleEl = document.getElementById('i-title');
+  titleEl.textContent = cart.title || '';
+  titleEl.style.color = '';
   document.getElementById('i-author').textContent = cart.author || '';
   document.getElementById('i-id').textContent = 'id:' + (cart.id || got);
   document.getElementById('cart-json').value = JSON.stringify(cart, null, 2);
+  canvas.setAttribute('aria-label', describeCartridge(cart, got, match));
+  document.title = `${cart.title || 'hologram'} — rapp-lantern`;
+  VIEW.autoOrbit = 0;
+  VIEW.userMoved = false;
+  setPlayerStatus(`Loaded ${cart.title || 'organism'}.`);
   startAnim();
-  // Notify sandboxed housing if present
-  if (_pmPort) {
-    if (match) _pmPort.postMessage({ type: 'hatched', id: got });
-    else _pmPort.postMessage({ type: 'hash-mismatch', got, declared });
-  }
+  return { id: got, declared, match };
 }
 
 function startAnim() {
@@ -492,7 +669,7 @@ function startAnim() {
     const time = (ts - T0) / 1000;
     const dt = VIEW.lastTs == null ? 0 : (ts - VIEW.lastTs) / 1000;
     VIEW.lastTs = ts;
-    if (!VIEW.dragging) VIEW.autoOrbit += dt * 0.32;
+    if (!VIEW.dragging && !VIEW.userMoved) VIEW.autoOrbit += dt * 0.32;
     if (CART) renderScene(ctx, CART.genome, time, VIEW);
     RAF = requestAnimationFrame(frame);
   }
@@ -500,27 +677,48 @@ function startAnim() {
 }
 
 /* ── Loader ───────────────────────────────────────────────────────────────── */
-async function loadFromUrl(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`fetch ${url} → ${res.status}`);
-  return await res.json();
+async function loadFromUrl(input, sequence) {
+  const url = new URL(input, location.href);
+  if (!/^https?:$/.test(url.protocol)) throw new Error('Only HTTP(S) cartridge URLs are supported.');
+  const controller = new AbortController();
+  activeFetch = controller;
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, LOAD_TIMEOUT_MS);
+  try {
+    const response = await fetch(url.href, {
+      signal: controller.signal,
+      credentials: url.origin === location.origin ? 'same-origin' : 'omit',
+      referrerPolicy: url.origin === location.origin ? 'strict-origin-when-cross-origin' : 'no-referrer'
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status} while fetching the cartridge.`);
+    const text = (await readBounded(response)).replace(/^\uFEFF/, '');
+    if (sequence != null && sequence !== LOAD_SEQUENCE) return null;
+    try { return JSON.parse(text); }
+    catch (error) { throw new Error(`Cartridge JSON is invalid: ${error.message}`); }
+  } catch (error) {
+    if (error.name === 'AbortError')
+      throw new Error(timedOut ? 'Cartridge request timed out after 15 seconds.' : 'Cartridge request was replaced by a newer load.');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    if (activeFetch === controller) activeFetch = null;
+  }
 }
 
 async function resolveAndLoad(input) {
   input = (input || '').trim();
   if (!input) return;
+  const sequence = beginLoad();
   let cart;
+  setPlayerStatus('Loading cartridge...');
   try {
-    if (input.startsWith('{')) { cart = JSON.parse(input); }
-    else {
-      const u = new URL(input, location.href);
-      cart = await loadFromUrl(u.href);
-    }
-    await loadCart(cart);
-    document.getElementById('cart-json').value = JSON.stringify(cart, null, 2);
-  } catch(e) {
-    document.getElementById('i-title').textContent = '✗ ' + (e.message || e);
-    document.getElementById('i-title').style.color = '#f85149';
+    if (input.replace(/^\uFEFF/, '').startsWith('{')) cart = JSON.parse(input.replace(/^\uFEFF/, ''));
+    else cart = await loadFromUrl(input, sequence);
+    if (!cart || sequence !== LOAD_SEQUENCE) return;
+    await loadCart(cart, sequence);
+  } catch (error) {
+    if (sequence !== LOAD_SEQUENCE) return;
+    setPlayerStatus(error.message || String(error), true);
   }
 }
 
@@ -528,35 +726,37 @@ async function resolveAndLoad(input) {
 (async () => {
   const p = new URLSearchParams(location.search);
   const hash = (location.hash || '').slice(1);
-  let cart = null;
+  let cart = null, bootError = '';
 
   if (hash) {
-    try { cart = JSON.parse(b64dec(hash)); } catch {}
+    try { cart = JSON.parse(b64dec(hash)); }
+    catch (error) { bootError = `Shared egg link is invalid: ${error.message}`; }
   }
   if (!cart && p.has('cart')) {
-    try { cart = await loadFromUrl(p.get('cart')); } catch(e) {
-      document.getElementById('i-title').textContent = '✗ ' + (e.message || e);
-    }
+    const sequence = beginLoad();
+    try { cart = await loadFromUrl(p.get('cart'), sequence); }
+    catch (error) { bootError = error.message || String(error); }
   }
   if (!cart && p.has('id')) {
     try {
-      const reg = await (await fetch('registry.json', { cache: 'no-store' })).json();
+      const response = await fetch('registry.json', { cache: 'no-store' });
+      if (!response.ok) throw new Error(`Registry returned HTTP ${response.status}.`);
+      const reg = await response.json();
       const entry = (reg.entries || []).find(e => e.name === p.get('id') || e.id === p.get('id'));
-      if (entry) cart = await loadFromUrl(new URL(entry.pin_path, location.href).href);
-    } catch {}
+      if (!entry) throw new Error(`No registry entry matches "${p.get('id')}".`);
+      const sequence = beginLoad();
+      cart = await loadFromUrl(new URL(entry.pin_path, location.href).href, sequence);
+    } catch (error) { bootError = error.message || String(error); }
   }
   if (!cart) cart = DEFAULT_CART;
 
-  await loadCart(cart);
-
-  // Populate title bar
   try {
-    const reg = await (await fetch('registry.json', { cache: 'no-store' })).json();
-    document.getElementById('meta').textContent =
-      `${reg.summary.cartridges} cartridges · <a href="registry.json">registry.json</a>`;
-    document.getElementById('meta').innerHTML =
-      `${reg.summary.cartridges} cartridges · <a href="registry.json">registry.json</a>`;
-  } catch {}
+    await loadCart(cart);
+  } catch (error) {
+    bootError = error.message || String(error);
+    if (cart !== DEFAULT_CART) await loadCart(DEFAULT_CART);
+  }
+  if (bootError) setPlayerStatus(`${bootError} Showing the built-in organism instead.`, true);
 })();
 
 /* ── Controls ─────────────────────────────────────────────────────────────── */
@@ -565,35 +765,48 @@ document.getElementById('btn-load').onclick = () =>
 document.getElementById('cart-url').addEventListener('keydown', e => { if(e.key==='Enter') document.getElementById('btn-load').click(); });
 
 document.getElementById('btn-apply').onclick = async () => {
+  const sequence = beginLoad();
   try {
-    const cart = JSON.parse(document.getElementById('cart-json').value);
-    await loadCart(cart);
-  } catch(e) {
-    document.getElementById('i-title').textContent = '✗ ' + e.message;
-    document.getElementById('i-title').style.color = '#f85149';
+    const cart = JSON.parse(document.getElementById('cart-json').value.replace(/^\uFEFF/, ''));
+    await loadCart(cart, sequence);
+  } catch (error) {
+    if (sequence === LOAD_SEQUENCE) setPlayerStatus(error.message || String(error), true);
   }
 };
 
 document.getElementById('btn-dl').onclick = () => {
   if (!CART) return;
   const blob = new Blob([JSON.stringify(CART, null, 2)], { type: 'application/json' });
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: (CART.title || 'cartridge') + '.json' });
+  const fileName = (CART.title || 'cartridge').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'cartridge';
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: fileName + '.egg' });
   a.click(); URL.revokeObjectURL(a.href);
 };
 
 document.getElementById('btn-link').onclick = async () => {
   if (!CART) return;
   const url = new URL('player.html#' + b64enc(JSON.stringify(CART)), location.href).href;
-  await navigator.clipboard?.writeText(url);
   const btn = document.getElementById('btn-link');
-  btn.textContent = 'copied ✓'; setTimeout(() => btn.textContent = 'copy link', 1400);
+  try {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('Clipboard access is unavailable.');
+    await navigator.clipboard.writeText(url);
+    btn.textContent = 'copied ✓';
+    setPlayerStatus('Share link copied.');
+    setTimeout(() => btn.textContent = 'copy link', 1400);
+  } catch (error) {
+    setPlayerStatus(error.message || String(error), true);
+  }
 };
 
 document.getElementById('btn-file').onclick = () => document.getElementById('file-in').click();
 document.getElementById('file-in').onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
-  try { await loadCart(JSON.parse(await f.text())); } catch(err) {
-    document.getElementById('i-title').textContent = '✗ ' + err.message;
+  const sequence = beginLoad();
+  try {
+    if (f.size > MAX_CART_BYTES) throw new Error('Cartridge exceeds the 2 MiB limit.');
+    const cart = JSON.parse((await f.text()).replace(/^\uFEFF/, ''));
+    await loadCart(cart, sequence);
+  } catch(error) {
+    if (sequence === LOAD_SEQUENCE) setPlayerStatus(error.message || String(error), true);
   }
 };
 
@@ -618,42 +831,88 @@ function orbitMove(x, y) {
 function orbitUp() {
   VIEW.dragging = false;
   canvas.classList.remove('dragging');
-  VIEW.pinch = 0;
+  VIEW.activePointer = null;
 }
 function orbitZoom(delta) {
   VIEW.zoom = clamp(VIEW.zoom * Math.exp(-delta * 0.0014), 0.72, 1.9);
   markOrbitInteraction();
 }
-canvas.addEventListener('mousedown', e => orbitDown(e.clientX, e.clientY));
-window.addEventListener('mousemove', e => orbitMove(e.clientX, e.clientY));
-window.addEventListener('mouseup', orbitUp);
-canvas.addEventListener('mouseleave', () => { if (VIEW.dragging) orbitUp(); else canvas.classList.remove('dragging'); });
-canvas.addEventListener('wheel', e => { e.preventDefault(); orbitZoom(e.deltaY); }, { passive: false });
-canvas.addEventListener('touchstart', e => {
-  if (e.touches.length === 1) orbitDown(e.touches[0].clientX, e.touches[0].clientY);
-  else if (e.touches.length === 2) {
-    VIEW.pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-    markOrbitInteraction();
-  }
-}, { passive: true });
-canvas.addEventListener('touchmove', e => {
-  if (e.touches.length === 1) orbitMove(e.touches[0].clientX, e.touches[0].clientY);
-  else if (e.touches.length === 2) {
-    const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-    if (VIEW.pinch) orbitZoom((VIEW.pinch - d) * 1.15);
-    VIEW.pinch = d;
-  }
-}, { passive: true });
-canvas.addEventListener('touchend', orbitUp);
-canvas.addEventListener('touchcancel', orbitUp);
+
+function resetView() {
+  VIEW.yaw = 0.85;
+  VIEW.pitch = 0.22;
+  VIEW.zoom = 1;
+  VIEW.autoOrbit = 0;
+  markOrbitInteraction();
+}
+
+function applyViewAction(action) {
+  const orbitStep = 0.18;
+  if (action === 'left') VIEW.yaw += orbitStep;
+  else if (action === 'right') VIEW.yaw -= orbitStep;
+  else if (action === 'up') VIEW.pitch = clamp(VIEW.pitch - orbitStep, -0.85, 0.92);
+  else if (action === 'down') VIEW.pitch = clamp(VIEW.pitch + orbitStep, -0.85, 0.92);
+  else if (action === 'zoom-in') orbitZoom(-180);
+  else if (action === 'zoom-out') orbitZoom(180);
+  else if (action === 'reset') { resetView(); return; }
+  markOrbitInteraction();
+}
+
+canvas.addEventListener('pointerdown', event => {
+  if (VIEW.activePointer != null) return;
+  VIEW.activePointer = event.pointerId;
+  canvas.setPointerCapture(event.pointerId);
+  canvas.focus({ preventScroll: true });
+  orbitDown(event.clientX, event.clientY);
+});
+canvas.addEventListener('pointermove', event => {
+  if (event.pointerId === VIEW.activePointer) orbitMove(event.clientX, event.clientY);
+});
+canvas.addEventListener('pointerup', event => {
+  if (event.pointerId === VIEW.activePointer) orbitUp();
+});
+canvas.addEventListener('pointercancel', event => {
+  if (event.pointerId === VIEW.activePointer) orbitUp();
+});
+canvas.addEventListener('wheel', event => {
+  if (document.activeElement !== canvas && !event.ctrlKey) return;
+  event.preventDefault();
+  orbitZoom(event.deltaY);
+}, { passive: false });
+canvas.addEventListener('keydown', event => {
+  const actions = {
+    ArrowLeft: 'left', a: 'left', A: 'left',
+    ArrowRight: 'right', d: 'right', D: 'right',
+    ArrowUp: 'up', w: 'up', W: 'up',
+    ArrowDown: 'down', s: 'down', S: 'down',
+    '+': 'zoom-in', '=': 'zoom-in',
+    '-': 'zoom-out', '_': 'zoom-out',
+    Home: 'reset', r: 'reset', R: 'reset'
+  };
+  const action = actions[event.key];
+  if (!action) return;
+  event.preventDefault();
+  applyViewAction(action);
+});
+document.querySelectorAll('[data-view]').forEach(button => {
+  button.addEventListener('click', () => {
+    applyViewAction(button.dataset.view);
+    canvas.focus({ preventScroll: true });
+  });
+});
+if (matchMedia('(pointer: coarse)').matches) orbitHintEl.textContent = 'swipe sideways or use controls';
 
 // Drag-and-drop
 canvas.addEventListener('dragover', e => e.preventDefault());
 document.getElementById('canvas').addEventListener('drop', async e => {
   e.preventDefault();
   const f = e.dataTransfer.files[0]; if (!f) return;
-  try { await loadCart(JSON.parse(await f.text())); } catch(err) {
-    document.getElementById('i-title').textContent = '✗ ' + err.message;
+  const sequence = beginLoad();
+  try {
+    if (f.size > MAX_CART_BYTES) throw new Error('Cartridge exceeds the 2 MiB limit.');
+    await loadCart(JSON.parse((await f.text()).replace(/^\uFEFF/, '')), sequence);
+  } catch(error) {
+    if (sequence === LOAD_SEQUENCE) setPlayerStatus(error.message || String(error), true);
   }
 });
 
@@ -686,15 +945,43 @@ document.getElementById('btn-qr').onclick = async () => {
 // Accepts {type:'hologram-init'} from a host page that embeds this player in a
 // sandboxed iframe (sandbox="allow-scripts"). Replies {type:'ready'} on the
 // MessageChannel port, then accepts {type:'load-cartridge', cart:{...}} and
-// replies {type:'hatched', id} or {type:'hash-mismatch', got, declared}.
+// replies with a load-scoped rendered/error event plus legacy trust events.
+async function handleIncomingCartridge(message, send) {
+  try {
+    const result = await loadCart(message.cart);
+    if (!result) {
+      send({ type: 'error', loadId: message.loadId, message: 'Load was superseded by a newer cartridge.' });
+      return;
+    }
+    send({ type: 'rendered', loadId: message.loadId, id: result.id, declared: result.declared, match: result.match });
+    if (result.match) send({ type: 'hatched', id: result.id });
+    else send({ type: 'hash-mismatch', got: result.id, declared: result.declared });
+  } catch (error) {
+    const messageText = error.message || String(error);
+    setPlayerStatus(messageText, true);
+    send({ type: 'error', loadId: message.loadId, message: messageText });
+  }
+}
+
 window.addEventListener('message', e => {
-  if (!e.data || e.data.type !== 'hologram-init') return;
-  _pmPort = e.ports[0] || null;
-  if (!_pmPort) return;
-  _pmPort.onmessage = async ev => {
-    const d = ev.data;
-    if (d && d.type === 'load-cartridge' && d.cart) await loadCart(d.cart);
-  };
-  _pmPort.postMessage({ type: 'ready' });
+  if (e.source !== window.parent || !e.data) return;
+  if (e.data.type === 'hologram-init') {
+    _pmPort = e.ports[0] || null;
+    if (!_pmPort) return;
+    _pmPort.onmessage = event => {
+      const message = event.data;
+      if (message && message.type === 'load-cartridge' && message.cart)
+        handleIncomingCartridge(message, response => _pmPort.postMessage(response));
+    };
+    _pmPort.start && _pmPort.start();
+    _pmPort.postMessage({ type: 'ready' });
+    return;
+  }
+  const sameOrigin = e.origin === location.origin || (location.origin === 'null' && e.origin === 'null');
+  if (!sameOrigin) return;
+  if (e.data.type === 'load-cartridge' && e.data.cart) {
+    const targetOrigin = e.origin === 'null' ? '*' : e.origin;
+    handleIncomingCartridge(e.data, response => e.source.postMessage(response, targetOrigin));
+  }
 });
 </script></body></html>

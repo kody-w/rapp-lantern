@@ -6,7 +6,7 @@ The universal player for **holographic organisms**. Drop in *any* `.egg` and orb
 
 ## What's an `.egg`?
 
-An `.egg` is a [`hologram-cartridge/1.0`](https://github.com/kody-w/rapp-static-apis) JSON — a self-describing, content-addressed organism with a layered genome (**form / surface / motion**). The player interprets it with **zero per-species code**, so the same lantern renders a weather sky, the moon, a crossbred hybrid, or an original box-creature identically well — as a 3D form you **drag to orbit** (scroll/pinch to zoom).
+An `.egg` is a [`hologram-cartridge/1.0`](https://github.com/kody-w/rapp-static-apis) JSON — a self-describing, content-addressed organism with a layered genome (**form / surface / motion**). The player interprets it with **zero per-species code**, so the same lantern renders a weather sky, the moon, a crossbred hybrid, or an original box-creature identically well — as a 3D form you drag to orbit. Visible controls and the arrow/WASD, `+`/`-`, and Home keys provide complete orbit, zoom, and reset access.
 
 `.egg` is just JSON; the extension is a hint. Any valid `hologram-cartridge/1.0` loads.
 
@@ -16,7 +16,10 @@ An `.egg` is a [`hologram-cartridge/1.0`](https://github.com/kody-w/rapp-static-
 - **Embed the player** directly, no loader needed:
   - `player.html?cart=<url-to-an-egg>`
   - `player.html#<base64url(JSON.stringify(egg))>`
+  - `player.html?embed=1#<base64url(JSON.stringify(egg))>` for a canvas-only responsive embed
   - or `postMessage({type:'load-cartridge', cart:<egg>})` into an `<iframe src="player.html">`.
+
+Every load path validates the cartridge before replacing the current organism. Remote loads are limited to HTTP(S), 2 MiB, and 15 seconds; malformed or stale loads leave the current scene intact.
 
 ## Make eggs
 
