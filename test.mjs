@@ -114,6 +114,12 @@ const { handleProtocolMessage } = loadSection(
     handlePrepareShare() {}
   }
 );
+const { safeEggFilename } = loadSection(
+  player,
+  'function safeEggFilename',
+  "\n\ndocument.getElementById('btn-dl')",
+  ['safeEggFilename']
+);
 
 let checks = 0;
 const check = (name, fn) => {
@@ -178,7 +184,9 @@ const invalidFixtures = [
   { schema: 'hologram-cartridge/1.0', genome: { layers: [{ role: 'form' }, { role: 'surface' }], compose: true } },
   { schema: 'hologram-cartridge/1.0', genome: { layers: [{ role: 'form' }, { role: 'surface' }], compose: { windows: [[]], loop: true } } },
   { schema: 'hologram-cartridge/1.0', genome: { layers: [{ role: 'form' }, { role: 'surface', opacity: -1 }] } },
-  { schema: 'hologram-cartridge/1.0', title: '\ud800', genome: { layers: [{ role: 'form' }, { role: 'surface' }] } }
+  { schema: 'hologram-cartridge/1.0', title: '\ud800', genome: { layers: [{ role: 'form' }, { role: 'surface' }] } },
+  { schema: 'hologram-cartridge/1.0', title: 'x'.repeat(513), genome: { layers: [{ role: 'form' }, { role: 'surface' }] } },
+  { schema: 'hologram-cartridge/1.0', extra: new Array(50001), genome: { layers: [{ role: 'form' }, { role: 'surface' }] } }
 ];
 check('both gates reject the same malformed fixtures', () => {
   for (const fixture of invalidFixtures) {
@@ -298,8 +306,16 @@ check('canvas backing store always honors its pixel budget', () => {
   }
 });
 
+check('download filenames remain browser-safe and byte-bounded', () => {
+  const filename = safeEggFilename('x'.repeat(400) + ': bad/name', 'abcdef0123456789');
+  assert.ok(new TextEncoder().encode(filename).byteLength <= 140);
+  assert.doesNotMatch(filename, /[<>:"/\\|?*\u0000-\u001f]/);
+  assert.match(filename, /-abcdef01\.egg$/);
+});
+
 check('protocol returns terminal errors for malformed payloads', () => {
   assert.match(player, /if \(window\.parent === window\) return;/);
+  assert.match(player, /'forward-drop'/);
   for (const payload of [null, false, 0, '']) {
     const responses = [];
     handleProtocolMessage(payload, response => responses.push(response));

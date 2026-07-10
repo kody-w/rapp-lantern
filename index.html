@@ -235,10 +235,11 @@ function estimateGenomeFaces(layers, windows) {
 function validateEgg(obj) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj))
     throw new Error('Expected a hologram-cartridge/1.0 object.');
-  let nodes = 0;
+  let values = 0;
   const stack = new WeakSet();
   const inspect = (value, depth) => {
     if (depth > 32) throw new Error('Cartridge nesting is too deep.');
+    if (++values > 50000) throw new Error('Cartridge exceeds the 50,000-value complexity limit.');
     const type = typeof value;
     if (type === 'string') {
       if (!hasWellFormedUnicode(value)) throw new Error('Cartridge strings must contain valid Unicode.');
@@ -251,8 +252,9 @@ function validateEgg(obj) {
     if (type !== 'object') throw new Error('Cartridge data must contain only JSON values.');
     if (!Array.isArray(value) && Object.prototype.toString.call(value) !== '[object Object]')
       throw new Error('Cartridge objects must be plain JSON objects.');
+    if (Array.isArray(value) && value.length > 50000)
+      throw new Error('Cartridge arrays cannot contain more than 50,000 entries.');
     if (stack.has(value)) throw new Error('Cartridge data cannot contain cycles.');
-    if (++nodes > 100000) throw new Error('Cartridge is too complex.');
     stack.add(value);
     if (Array.isArray(value)) {
       for (const child of value) inspect(child, depth + 1);
@@ -274,6 +276,10 @@ function validateEgg(obj) {
     if (obj[key] != null && typeof obj[key] !== 'string')
       throw new Error(`Cartridge ${key} must be a string.`);
   }
+  if (obj.title && new TextEncoder().encode(obj.title).byteLength > 512)
+    throw new Error('Cartridge title exceeds 512 UTF-8 bytes.');
+  if (obj.author && new TextEncoder().encode(obj.author).byteLength > 256)
+    throw new Error('Cartridge author exceeds 256 UTF-8 bytes.');
   if (obj.id && (obj.id.length > 256 || /[\u0000-\u001f]/.test(obj.id)))
     throw new Error('Cartridge id is invalid.');
   if (obj.parents != null && (!Array.isArray(obj.parents) || obj.parents.length > 128 ||
@@ -454,7 +460,7 @@ function enforceJournalRetention(store, transaction, protectedContentId = null, 
   };
 }
 
-async function commitSpecimen(cart, result, quotaEvictionCount = 0, expectedFingerprint = null) {
+async function commitSpecimen(cart, result, quotaEvictionCount = 0, expectedFingerprint = null, options = {}) {
   const db = await openJournal();
   const now = Date.now();
   const transaction = db.transaction(JOURNAL_STORE, 'readwrite');
@@ -483,7 +489,7 @@ async function commitSpecimen(cart, result, quotaEvictionCount = 0, expectedFing
       trust: result.trust,
       cart,
       bytes: cartridgeBytes(cart),
-      pinned: Boolean(existing && existing.pinned),
+      pinned: Boolean(options.pin || (existing && existing.pinned)),
       addedAt: existing ? existing.addedAt : now,
       lastOpenedAt: now,
       opens: (existing ? existing.opens : 0) + 1
@@ -502,13 +508,13 @@ async function commitSpecimen(cart, result, quotaEvictionCount = 0, expectedFing
   }
 }
 
-async function saveSpecimen(cart, result, focusTarget = null) {
+async function saveSpecimen(cart, result, focusTarget = null, options = {}) {
   if (!result.contentId) throw new Error('Player did not return a cartridge content id.');
   let quotaEvictionCount = 0;
   let candidateFingerprint = null;
   while (true) {
     try {
-      await commitSpecimen(cart, result, quotaEvictionCount, candidateFingerprint);
+      await commitSpecimen(cart, result, quotaEvictionCount, candidateFingerprint, options);
       break;
     } catch (error) {
       const quotaError = error.name === 'QuotaExceededError' || /quota/i.test(error.message || '');
@@ -532,7 +538,7 @@ async function saveSpecimen(cart, result, focusTarget = null) {
   }
   journalChanged();
   await refreshJournal(focusTarget);
-  journalStatus('Specimen saved.');
+  journalStatus(options.pin ? 'Specimen saved and pinned.' : 'Specimen saved.');
 }
 
 async function updateSpecimen(contentId, update, focusAction = null, initiator = null) {
@@ -852,9 +858,7 @@ function activateShareDock(cart, result, sequence) {
 function confirmedEggArtifact() {
   if (!confirmedCart || !confirmedResult) throw new Error('No confirmed specimen is available.');
   const bytes = JSON.stringify(confirmedCart);
-  const title = (confirmedCart.title || 'cartridge').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'cartridge';
-  const suffix = confirmedResult.contentId ? '-' + confirmedResult.contentId.slice(0, 8) : '';
-  const filename = `${title}${suffix}.egg`;
+  const filename = safeEggFilename(confirmedCart.title, confirmedResult.contentId);
   const blob = new Blob([bytes], { type: 'application/json' });
   const file = typeof File === 'function' ? new File([blob], filename, { type: blob.type }) : null;
   return { bytes, blob, file, filename };
@@ -862,6 +866,20 @@ function confirmedEggArtifact() {
 
 function shareIsCurrent(share) {
   return Boolean(share && preparedShare === share && confirmedResult && confirmedResult.contentId === share.contentId);
+}
+
+function safeEggFilename(title, contentId = '') {
+  const cleaned = String(title || 'cartridge').normalize('NFKC')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'cartridge';
+  let base = '';
+  for (const character of cleaned) {
+    if (new TextEncoder().encode(base + character).byteLength > 120) break;
+    base += character;
+  }
+  const suffix = contentId ? '-' + contentId.slice(0, 8) : '';
+  return `${base || 'cartridge'}${suffix}.egg`;
 }
 
 async function copyPreparedShare(share = preparedShare) {
@@ -964,7 +982,7 @@ async function loadEgg(obj, name, sequence = beginLoad(), options = {}) {
     if (options.collect !== false) {
       journalStatus('Saving specimen...');
       if (options.awaitCollection) {
-        try { await saveSpecimen(cart, result); }
+        try { await saveSpecimen(cart, result, null, { pin: Boolean(options.pinOnSave) }); }
         catch (error) {
           const message = error.message || String(error);
           journalStatus(message, true);
@@ -1178,7 +1196,7 @@ refreshJournal();
   if (keepRequested) {
     try {
       const cart = parseKeepFragment((location.hash || '').slice(1));
-      const result = await loadEgg(cart, cart.title || 'shared specimen', sequence, { awaitCollection: true });
+      const result = await loadEgg(cart, cart.title || 'shared specimen', sequence, { awaitCollection: true, pinOnSave: true });
       if (result && sequence === loadSequence)
         history.replaceState(null, '', new URL('index.html', location.href).href);
     } catch (error) {

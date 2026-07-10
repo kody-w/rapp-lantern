@@ -18,7 +18,7 @@ An `.egg` is a [`hologram-cartridge/1.0`](https://github.com/kody-w/rapp-static-
   - `player.html?cart=<url-to-an-egg>`
   - `player.html#<base64url(JSON.stringify(egg))>`
   - `player.html?embed=1#<base64url(JSON.stringify(egg))>` for a canvas-only responsive embed
-  - or `postMessage({type:'load-cartridge', version:1, loadId:'mine', cart:<egg>}, playerOrigin)` into an `<iframe src="player.html">`. The player accepts only its parent window and replies with a scoped `rendered` or `error` event. Protocol v1 also exposes `prepare-share` for the currently confirmed `contentId`.
+  - or `postMessage({type:'load-cartridge', version:1, loadId:'mine', cart:<egg>}, playerOrigin)` into an `<iframe src="player.html">`. The player accepts only its parent window and replies with a scoped `rendered` or `error` event. Protocol v1 also exposes `prepare-share` and forwards embedded file drops over either a MessageChannel or the direct parent transport.
 
 Every load path validates the cartridge before replacing the current organism. Remote loads are limited to HTTP(S), 2 MiB, and 15 seconds; malformed or stale loads leave the current scene intact.
 
@@ -26,7 +26,7 @@ Shared player URLs accept exactly one source: a fragment, `cart`, or `id` plus i
 
 Copy-link and QR actions use registry URLs bound to the complete cartridge hash when a specimen matches `registry.json`; imported eggs use self-contained hash links. The local QR encoder supports payloads through 997 bytes, while larger eggs remain downloadable instead of generating unreliable codes.
 
-Standalone shared specimens expose an explicit **Keep in Field Journal** handoff. The handoff carries the exact cartridge in a bounded canonical fragment, revalidates it in the loader, and records it only after a confirmed render.
+Standalone shared specimens expose an explicit **Keep in Field Journal** handoff. The handoff carries the exact cartridge in a bounded canonical fragment, revalidates it in the loader, and records it as pinned only after a confirmed render and durable Journal commit.
 
 Animation pauses while hidden or offscreen, preserves its logical clock when resumed, and honors live `prefers-reduced-motion` changes. Manual orbit and zoom continue to redraw in reduced-motion or paused mode.
 

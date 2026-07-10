@@ -648,10 +648,11 @@ function estimateGenomeFaces(layers, windows) {
 function validateCartridge(cart) {
   if (!cart || typeof cart !== 'object' || Array.isArray(cart))
     throw new Error('Expected a hologram-cartridge/1.0 object.');
-  let nodes = 0;
+  let values = 0;
   const stack = new WeakSet();
   const inspect = (value, depth) => {
     if (depth > 32) throw new Error('Cartridge nesting is too deep.');
+    if (++values > 50000) throw new Error('Cartridge exceeds the 50,000-value complexity limit.');
     const type = typeof value;
     if (type === 'string') {
       if (!hasWellFormedUnicode(value)) throw new Error('Cartridge strings must contain valid Unicode.');
@@ -664,8 +665,9 @@ function validateCartridge(cart) {
     if (type !== 'object') throw new Error('Cartridge data must contain only JSON values.');
     if (!Array.isArray(value) && Object.prototype.toString.call(value) !== '[object Object]')
       throw new Error('Cartridge objects must be plain JSON objects.');
+    if (Array.isArray(value) && value.length > 50000)
+      throw new Error('Cartridge arrays cannot contain more than 50,000 entries.');
     if (stack.has(value)) throw new Error('Cartridge data cannot contain cycles.');
-    if (++nodes > 100000) throw new Error('Cartridge is too complex.');
     stack.add(value);
     if (Array.isArray(value)) {
       for (const child of value) inspect(child, depth + 1);
@@ -687,6 +689,10 @@ function validateCartridge(cart) {
     if (cart[key] != null && typeof cart[key] !== 'string')
       throw new Error(`Cartridge ${key} must be a string.`);
   }
+  if (cart.title && new TextEncoder().encode(cart.title).byteLength > 512)
+    throw new Error('Cartridge title exceeds 512 UTF-8 bytes.');
+  if (cart.author && new TextEncoder().encode(cart.author).byteLength > 256)
+    throw new Error('Cartridge author exceeds 256 UTF-8 bytes.');
   if (cart.id && (cart.id.length > 256 || /[\u0000-\u001f]/.test(cart.id)))
     throw new Error('Cartridge id is invalid.');
   if (cart.parents != null && (!Array.isArray(cart.parents) || cart.parents.length > 128 ||
@@ -793,7 +799,7 @@ async function readBounded(response, maxBytes = MAX_CART_BYTES, label = 'Cartrid
 const DEFAULT_CART = {"schema":"hologram-cartridge/1.0","id":"d45a79d29e99","title":"Lumina","author":"@kody-w","born":{"coord":"0,0","from":"genesis"},"parents":[],"genome":{"layers":[{"role":"form","k":30,"shape":"blob","limbs":0,"segments":8,"symmetry":"radial","body_r":0.3,"limb_len":0},{"role":"surface","k":85,"palette":["#00ccff","#0088ff","#ffffff","#aaddff"],"pattern":"glow","glow":0.8,"opacity":0.85},{"role":"motion","k":60,"breathe":0.2,"drift":0.5,"pulse":0.8,"reach":0}],"compose":{"windows":[[0,1,2]],"loop":true}},"sig":""};
 
 /* ── State ────────────────────────────────────────────────────────────────── */
-let CART = null, RAF = null, _pmPort = null;
+let CART = null, RAF = null, _pmPort = null, _directHost = null;
 let LOAD_SEQUENCE = 0, activeFetch = null, activeRegistryController = null;
 let CURRENT_GENOME_ID = null, CURRENT_CONTENT_ID = null;
 const RENDER_STATES = new Map();
@@ -1353,11 +1359,25 @@ document.getElementById('btn-apply').onclick = async () => {
   }
 };
 
+function safeEggFilename(title, contentId = '') {
+  const cleaned = String(title || 'cartridge').normalize('NFKC')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'cartridge';
+  let base = '';
+  for (const character of cleaned) {
+    if (new TextEncoder().encode(base + character).byteLength > 120) break;
+    base += character;
+  }
+  const suffix = contentId ? '-' + contentId.slice(0, 8) : '';
+  return `${base || 'cartridge'}${suffix}.egg`;
+}
+
 document.getElementById('btn-dl').onclick = () => {
   if (!CART) return;
   const blob = new Blob([JSON.stringify(CART)], { type: 'application/json' });
-  const fileName = (CART.title || 'cartridge').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'cartridge';
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: fileName + '.egg' });
+  const fileName = safeEggFilename(CART.title, CURRENT_CONTENT_ID);
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: fileName });
   a.click(); URL.revokeObjectURL(a.href);
 };
 
@@ -1505,24 +1525,36 @@ document.querySelectorAll('[data-view]').forEach(button => {
 if (matchMedia('(pointer: coarse)').matches) orbitHintEl.textContent = 'swipe sideways or use controls';
 
 // Drag-and-drop
+function postDropToHost(message) {
+  if (_pmPort) {
+    _pmPort.postMessage(message);
+    return true;
+  }
+  if (_directHost) {
+    _directHost.source.postMessage(message, _directHost.origin);
+    return true;
+  }
+  return false;
+}
+
 canvas.addEventListener('dragover', e => e.preventDefault());
 let dropSequence = 0;
 document.getElementById('canvas').addEventListener('drop', async e => {
   e.preventDefault();
   const f = e.dataTransfer.files[0]; if (!f) return;
-  const embedded = document.documentElement.classList.contains('embed');
+  const embedded = document.documentElement.classList.contains('embed') || Boolean(_pmPort || _directHost);
   const dropId = `drop-${Date.now()}-${++dropSequence}`;
   const sequence = embedded ? null : beginLoad();
   try {
     if (embedded) {
-      if (!_pmPort) throw new Error('The embedding page is not ready to receive this egg.');
-      _pmPort.postMessage({ type: 'drop-started', version: PROTOCOL_VERSION, dropId });
+      if (!postDropToHost({ type: 'drop-started', version: PROTOCOL_VERSION, dropId }))
+        throw new Error('The embedding page is not ready to receive this egg.');
     }
     if (f.size > MAX_CART_BYTES) throw new Error('Cartridge exceeds the 2 MiB limit.');
     const cart = parseCartridgeText(await f.text());
     if (!embedded && sequence !== LOAD_SEQUENCE) return;
     if (embedded) {
-      _pmPort.postMessage({
+      postDropToHost({
         type: 'cartridge-dropped',
         version: PROTOCOL_VERSION,
         dropId,
@@ -1535,8 +1567,8 @@ document.getElementById('canvas').addEventListener('drop', async e => {
   } catch(error) {
     if (embedded || sequence === LOAD_SEQUENCE) {
       const message = error.message || String(error);
-      if (embedded && _pmPort)
-        _pmPort.postMessage({ type: 'drop-error', version: PROTOCOL_VERSION, dropId, message });
+      if (embedded && postDropToHost({ type: 'drop-error', version: PROTOCOL_VERSION, dropId, message }))
+        return;
       else setPlayerStatus(message, true);
     }
   }
@@ -1705,6 +1737,7 @@ window.addEventListener('message', e => {
       _pmPort.onmessage = null;
       _pmPort.close();
     }
+    _directHost = null;
     MOTION.disposed = false;
     _pmPort = port;
     const send = response => port.postMessage(response);
@@ -1718,13 +1751,15 @@ window.addEventListener('message', e => {
     port.postMessage({
       type: 'ready',
       version: PROTOCOL_VERSION,
-      capabilities: ['load-cartridge', 'cancel-loads', 'dispose', 'transactional-render', 'prepare-share']
+      capabilities: ['load-cartridge', 'cancel-loads', 'dispose', 'transactional-render', 'prepare-share', 'forward-drop']
     });
     invalidateRender();
     return;
   }
   const targetOrigin = e.origin === 'null' ? '*' : e.origin;
+  if (e.data && typeof e.data === 'object' && e.data.type === 'load-cartridge')
+    _directHost = { source: e.source, origin: targetOrigin };
   const send = response => e.source.postMessage(response, targetOrigin);
-  handleProtocolMessage(e.data, send);
+  handleProtocolMessage(e.data, send, () => { _directHost = null; });
 });
 </script></body></html>
