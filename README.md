@@ -12,7 +12,7 @@ An `.egg` is a [`hologram-cartridge/1.0`](https://github.com/kody-w/rapp-static-
 
 ## Use it
 
-- **The loader** (`index.html`): drop an `.egg` anywhere on the page, pick a file, paste JSON, or load a URL — then **unload** and load another. Six example eggs are built in. Every confirmed specimen gets a prepared Share/Copy/QR/Download dock. Deliberately opened specimens enter a content-addressed local Field Journal with search, pin, reopen, remove, and pin-safe recent clearing; automatic startup never counts as a discovery. The journal preserves up to 16 pins, eight unpinned recents, and 24 MiB, with explicit storage-protection and quota feedback.
+- **The loader** (`index.html`): drop an `.egg` anywhere on the page, pick a file, paste JSON, or load a URL — then **unload** and load another. Eight example eggs cover every supported shape, pattern, and symmetry plus multi-window composition. Every confirmed specimen gets a prepared Share/Copy/QR/Download dock. Deliberately opened specimens enter a content-addressed local Field Journal with search, pin, reopen, remove, and pin-safe recent clearing; automatic startup never counts as a discovery. The journal preserves up to 16 pins, eight unpinned recents, and 24 MiB, with explicit storage-protection and quota feedback.
 - **Embed the player** directly, no loader needed:
   - `player.html?id=moon` for a bundled, registry-verified specimen
   - `player.html?cart=<url-to-an-egg>`
@@ -25,6 +25,8 @@ Every load path validates the cartridge before replacing the current organism. R
 Shared player URLs accept exactly one source: a fragment, `cart`, or `id` plus its optional content hash. Ambiguous or unverifiable links fail closed instead of substituting another organism.
 
 Copy-link and QR actions use registry URLs bound to the complete cartridge hash when a specimen matches `registry.json`; imported eggs use self-contained hash links. The local QR encoder supports payloads through 997 bytes, while larger eggs remain downloadable instead of generating unreliable codes.
+
+Standalone shared specimens expose an explicit **Keep in Field Journal** handoff. The handoff carries the exact cartridge in a bounded canonical fragment, revalidates it in the loader, and records it only after a confirmed render.
 
 Animation pauses while hidden or offscreen, preserves its logical clock when resumed, and honors live `prefers-reduced-motion` changes. Manual orbit and zoom continue to redraw in reduced-motion or paused mode.
 

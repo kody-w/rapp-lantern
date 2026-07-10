@@ -1,0 +1,58 @@
+{
+  "schema": "hologram-cartridge/1.0",
+  "id": "3f1de1d09cd8",
+  "title": "Aster Stripe",
+  "author": "@rapp-lantern",
+  "born": {
+    "coord": "atlas:star-stripe",
+    "from": "phenotype atlas"
+  },
+  "parents": [],
+  "genome": {
+    "layers": [
+      {
+        "role": "form",
+        "k": 72,
+        "shape": "star",
+        "limbs": 4,
+        "segments": 10,
+        "symmetry": "bilateral",
+        "body_r": 0.45,
+        "limb_len": 0.4,
+        "spikes": 5
+      },
+      {
+        "role": "surface",
+        "k": 68,
+        "palette": [
+          "#ff6b9d",
+          "#ffd166",
+          "#7bdff2",
+          "#5f5aa2"
+        ],
+        "pattern": "stripe",
+        "glow": 0.3,
+        "opacity": 1
+      },
+      {
+        "role": "motion",
+        "k": 55,
+        "breathe": 0.25,
+        "drift": 0.2,
+        "pulse": 0.6,
+        "reach": 0.3
+      }
+    ],
+    "compose": {
+      "windows": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "loop": true
+    }
+  },
+  "sig": ""
+}

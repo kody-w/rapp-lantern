@@ -69,7 +69,7 @@
 
  <div class="meta">
   <span id="title"></span><span id="born"></span>
-  <span id="hint">drag inside the frame to orbit · scroll to zoom</span>
+  <span id="hint">drag to orbit · click the view, then scroll to zoom</span>
  </div>
 
  <div class="bar">
@@ -140,6 +140,7 @@ let sharePreparationToken = 0;
 let journalDbPromise = null;
 const pendingPlayerLoads = new Map();
 const pendingShareRequests = new Map();
+const pendingDropSequences = new Map();
 const journalChannel = window.BroadcastChannel ? new window.BroadcastChannel('rapp-lantern-journal') : null;
 if (journalChannel) journalChannel.onmessage = () => refreshJournal();
 
@@ -180,6 +181,20 @@ function parseEggText(text) {
   if (new TextEncoder().encode(clean).byteLength > MAX_CART_BYTES)
     throw new Error('Cartridge exceeds the 2 MiB limit.');
   return JSON.parse(clean);
+}
+
+function parseKeepFragment(fragment) {
+  const encoded = String(fragment);
+  if (!encoded || !/^[A-Za-z0-9_-]+$/.test(encoded) || encoded.length % 4 === 1)
+    throw new Error('The Journal handoff fragment is invalid.');
+  if (Math.floor(encoded.length * 3 / 4) > MAX_CART_BYTES)
+    throw new Error('The Journal handoff exceeds the 2 MiB limit.');
+  let padded = encoded.replace(/-/g, '+').replace(/_/g, '/');
+  while (padded.length % 4) padded += '=';
+  const binary = atob(padded);
+  const canonical = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  if (canonical !== encoded) throw new Error('The Journal handoff is not canonical base64url.');
+  return parseEggText(decodeURIComponent(escape(binary)));
 }
 
 function hasWellFormedUnicode(value) {
@@ -665,6 +680,7 @@ function cancelPendingPlayerLoads(message = 'Load was cancelled.', restore = tru
 
 function beginLoad({ restore = true } = {}) {
   loadSequence += 1;
+  pendingDropSequences.clear();
   if (activeFetch) activeFetch.abort();
   activeFetch = null;
   cancelPendingPlayerLoads('Load was replaced by a newer request.', restore);
@@ -743,6 +759,26 @@ function handlePlayerMessage(event, readyResolve, readyReject) {
     return;
   }
   if (message.version != null && message.version !== PROTOCOL_VERSION) return;
+  if (message.type === 'drop-started' && typeof message.dropId === 'string') {
+    const sequence = beginLoad();
+    pendingDropSequences.set(message.dropId, sequence);
+    return;
+  }
+  if (message.type === 'cartridge-dropped' && typeof message.dropId === 'string') {
+    const sequence = pendingDropSequences.get(message.dropId);
+    pendingDropSequences.delete(message.dropId);
+    if (sequence == null || sequence !== loadSequence) return;
+    loadEgg(message.cart, message.name || 'dropped specimen', sequence)
+      .catch(error => { if (sequence === loadSequence) status(error.message || String(error), true); });
+    return;
+  }
+  if (message.type === 'drop-error' && typeof message.dropId === 'string') {
+    const sequence = pendingDropSequences.get(message.dropId);
+    pendingDropSequences.delete(message.dropId);
+    if (sequence === loadSequence)
+      status(message.message || 'Could not read the dropped egg.', true);
+    return;
+  }
   if (message.type === 'protocol-error') {
     readyReject(new Error(message.message || 'The player rejected this protocol version.'));
     return;
@@ -927,7 +963,17 @@ async function loadEgg(obj, name, sequence = beginLoad(), options = {}) {
     status(`Loaded ${cart.title || name || 'organism'} (${trust}) — drag, use the view controls, or press the arrow keys.`);
     if (options.collect !== false) {
       journalStatus('Saving specimen...');
-      saveSpecimen(cart, result).catch(error => journalStatus(error.message || String(error), true));
+      if (options.awaitCollection) {
+        try { await saveSpecimen(cart, result); }
+        catch (error) {
+          const message = error.message || String(error);
+          journalStatus(message, true);
+          status(`Specimen rendered but was not saved: ${message}`, true);
+          return false;
+        }
+      } else {
+        saveSpecimen(cart, result).catch(error => journalStatus(error.message || String(error), true));
+      }
     }
     return result;
   } catch (error) {
@@ -968,14 +1014,18 @@ async function loadFile(file) {
   }
 }
 
-$('pick').onclick = () => $('file').click();
+function chooseEggFile() {
+  $('file').value = '';
+  $('file').click();
+}
+$('pick').onclick = chooseEggFile;
 $('file').onchange = e => e.target.files[0] && loadFile(e.target.files[0]);
 $('unload').onclick = unload;
-drop.onclick = () => $('file').click();
+drop.onclick = chooseEggFile;
 drop.addEventListener('keydown', event => {
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault();
-    $('file').click();
+    chooseEggFile();
   }
 });
 $('loadpaste').onclick = async () => {
@@ -1088,6 +1138,8 @@ const EGGS = [
   ['🧬 crossbred hybrid', 'cross-ushuaia-dubai.egg'],
   ['🕷️ original (box-species)', 'original-frenzy.egg'],
   ['✨ Lumina (genesis)', 'lumina.egg'],
+  ['⭐ atlas star (stripe)', 'atlas-star-stripe.egg'],
+  ['🔗 atlas segments (spot + shift)', 'atlas-segment-spot.egg'],
 ];
 const eggsEl = $('eggs');
 for (const [label, file] of EGGS) {
@@ -1120,9 +1172,22 @@ $('journal-persist').onclick = async () => {
   }
 };
 refreshJournal();
-// auto-load one so the lantern is never empty on first visit
 (async () => {
   const sequence = beginLoad();
+  const keepRequested = new URLSearchParams(location.search).get('keep') === '1';
+  if (keepRequested) {
+    try {
+      const cart = parseKeepFragment((location.hash || '').slice(1));
+      const result = await loadEgg(cart, cart.title || 'shared specimen', sequence, { awaitCollection: true });
+      if (result && sequence === loadSequence)
+        history.replaceState(null, '', new URL('index.html', location.href).href);
+    } catch (error) {
+      if (sequence === loadSequence)
+        status(`Could not keep this specimen: ${error.message || error}`, true);
+    }
+    return;
+  }
+  // Keep the ordinary first visit from opening on an empty stage.
   try {
     const cart = await fetchEgg('eggs/' + EGGS[0][1], sequence);
     if (cart) await loadEgg(cart, EGGS[0][0], sequence, { collect: false });

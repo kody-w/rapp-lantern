@@ -1,0 +1,74 @@
+{
+  "schema": "hologram-cartridge/1.0",
+  "id": "48bfbc4aee2a",
+  "title": "Segment Spot Shift",
+  "author": "@rapp-lantern",
+  "born": {
+    "coord": "atlas:segment-spot",
+    "from": "phenotype atlas"
+  },
+  "parents": [],
+  "genome": {
+    "layers": [
+      {
+        "role": "form",
+        "k": 64,
+        "shape": "segment",
+        "limbs": 3,
+        "segments": 7,
+        "symmetry": "bilateral",
+        "body_r": 0.35,
+        "limb_len": 0.5,
+        "spikes": 2
+      },
+      {
+        "role": "surface",
+        "k": 62,
+        "palette": [
+          "#8ac926",
+          "#1982c4",
+          "#ffca3a"
+        ],
+        "pattern": "spot",
+        "glow": 0.15,
+        "opacity": 0.9
+      },
+      {
+        "role": "motion",
+        "k": 58,
+        "breathe": 0.2,
+        "drift": 0.3,
+        "pulse": 0.5,
+        "reach": 0.4
+      },
+      {
+        "role": "surface",
+        "k": 78,
+        "palette": [
+          "#6a4c93",
+          "#ff595e",
+          "#ffffff"
+        ],
+        "pattern": "glow",
+        "glow": 0.7,
+        "opacity": 0.85
+      }
+    ],
+    "compose": {
+      "windows": [
+        [
+          0,
+          1,
+          2
+        ],
+        [
+          0,
+          3,
+          2
+        ]
+      ],
+      "loop": true
+    }
+  },
+  "sig": ""
+}

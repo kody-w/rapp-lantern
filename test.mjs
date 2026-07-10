@@ -63,6 +63,13 @@ const { b64enc, parseCartridgeFragment } = loadSection(
   '\n\nfunction estimateGenomeFaces',
   ['b64enc', 'parseCartridgeFragment']
 );
+const { parseKeepFragment } = loadSection(
+  index,
+  'function parseEggText',
+  '\n\nfunction hasWellFormedUnicode',
+  ['parseKeepFragment'],
+  { MAX_CART_BYTES: 2 * 1024 * 1024 }
+);
 const { validateRegistry } = loadSection(
   player,
   'function validateRegistry',
@@ -144,6 +151,24 @@ check('both gates accept every bundled egg', () => {
     assert.doesNotThrow(() => playerGate(structuredClone(cart)), `player: ${file}`);
     assert.doesNotThrow(() => indexGate(structuredClone(cart)), `index: ${file}`);
   }
+});
+
+check('phenotype atlas covers every renderer enum and multi-window composition', () => {
+  const forms = new Set(), patterns = new Set(), symmetries = new Set();
+  let hasMultiWindow = false;
+  for (const [, cart] of eggs) {
+    for (const layer of cart.genome.layers) {
+      if (layer.role === 'form') {
+        forms.add(layer.shape);
+        symmetries.add(layer.symmetry);
+      } else if (layer.role === 'surface') patterns.add(layer.pattern);
+    }
+    if ((cart.genome.compose && cart.genome.compose.windows || []).length > 1) hasMultiWindow = true;
+  }
+  assert.deepEqual([...forms].sort(), ['blob', 'ring', 'segment', 'star']);
+  assert.deepEqual([...patterns].sort(), ['glow', 'solid', 'spot', 'stripe']);
+  assert.deepEqual([...symmetries].sort(), ['bilateral', 'radial']);
+  assert.equal(hasMultiWindow, true);
 });
 
 const invalidFixtures = [
@@ -236,6 +261,13 @@ check('base64url fragments are canonical and bounded', () => {
     () => parseCartridgeFragment('A'.repeat(Math.ceil((2 * 1024 * 1024) * 4 / 3) + 8)),
     /2 MiB/
   );
+});
+
+check('Journal handoff fragments round-trip exact cartridges', () => {
+  const cart = eggs[0][1];
+  const encoded = Buffer.from(JSON.stringify(cart), 'utf8').toString('base64url');
+  assert.equal(JSON.stringify(parseKeepFragment(encoded)), JSON.stringify(cart));
+  assert.throws(() => parseKeepFragment(encoded + 'A'));
 });
 
 check('QR version transitions and payload limit', () => {

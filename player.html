@@ -60,7 +60,7 @@
  }
  html.embed,html.embed body{width:100%;height:100%;min-height:0;overflow:hidden}
  html.embed #wrap{display:block;width:100%;height:100%;max-width:none;padding:0}
- html.embed #header,html.embed #workbench{display:none}
+ html.embed #header,html.embed #workbench{display:none!important}
  html.embed #stage{width:100%;height:100%;max-width:none}
  html.embed #canvas{width:100%;height:100%;border:0;border-radius:0}
  @media(max-width:420px){
@@ -98,6 +98,7 @@
   <button id="btn-dl" disabled>↓ download .egg</button>
   <button id="btn-link" disabled>copy link</button>
   <button id="btn-qr" disabled aria-controls="qr-wrap" aria-expanded="false">QR</button>
+    <a class="button-link" id="keep-link" aria-disabled="true" tabindex="-1">Keep in Field Journal · loading…</a>
     <a class="button-link" href="index.html">gallery →</a>
   </div>
   <div id="load-row">
@@ -842,6 +843,12 @@ function showSourceError(message) {
   CURRENT_CONTENT_ID = null;
   clearShareArtifacts();
   setOutputActionsEnabled(false);
+  const keepLink = document.getElementById('keep-link');
+  keepLink.href = 'index.html';
+  keepLink.textContent = 'Open gallery';
+  keepLink.setAttribute('aria-disabled', 'true');
+  keepLink.removeAttribute('href');
+  keepLink.setAttribute('tabindex', '-1');
   verEl.style.display = 'none';
   document.getElementById('i-title').textContent = 'Could not verify this egg';
   document.getElementById('i-title').style.color = '#f85149';
@@ -1025,6 +1032,7 @@ async function loadCart(input, sequence = beginLoad(), options = {}) {
   CURRENT_CONTENT_ID = contentId;
   clearShareArtifacts();
   setOutputActionsEnabled(true);
+  updateJournalHandoff(cart);
   verEl.style.display = 'block';
   if (trust === 'verified') {
     verEl.textContent = got + ' ✓';
@@ -1216,6 +1224,25 @@ async function makeShareUrl() {
   return url;
 }
 
+function updateJournalHandoff(cart) {
+  const link = document.getElementById('keep-link');
+  const fragment = b64enc(JSON.stringify(cart));
+  const url = new URL('index.html', location.href);
+  url.searchParams.set('keep', '1');
+  url.hash = fragment;
+  if (new TextEncoder().encode(url.href).byteLength <= MAX_INLINE_URL_BYTES) {
+    link.href = url.href;
+    link.textContent = 'Keep in Field Journal →';
+    link.removeAttribute('aria-disabled');
+    link.removeAttribute('tabindex');
+  } else {
+    link.removeAttribute('href');
+    link.textContent = 'Open gallery · download to keep';
+    link.setAttribute('aria-disabled', 'true');
+    link.setAttribute('tabindex', '-1');
+  }
+}
+
 async function resolveAndLoad(input) {
   input = (input || '').trim();
   if (!input) return;
@@ -1367,7 +1394,11 @@ document.getElementById('btn-link').onclick = async () => {
   }
 };
 
-document.getElementById('btn-file').onclick = () => document.getElementById('file-in').click();
+document.getElementById('btn-file').onclick = () => {
+  const input = document.getElementById('file-in');
+  input.value = '';
+  input.click();
+};
 document.getElementById('file-in').onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
   const sequence = beginLoad();
@@ -1475,15 +1506,39 @@ if (matchMedia('(pointer: coarse)').matches) orbitHintEl.textContent = 'swipe si
 
 // Drag-and-drop
 canvas.addEventListener('dragover', e => e.preventDefault());
+let dropSequence = 0;
 document.getElementById('canvas').addEventListener('drop', async e => {
   e.preventDefault();
   const f = e.dataTransfer.files[0]; if (!f) return;
-  const sequence = beginLoad();
+  const embedded = document.documentElement.classList.contains('embed');
+  const dropId = `drop-${Date.now()}-${++dropSequence}`;
+  const sequence = embedded ? null : beginLoad();
   try {
+    if (embedded) {
+      if (!_pmPort) throw new Error('The embedding page is not ready to receive this egg.');
+      _pmPort.postMessage({ type: 'drop-started', version: PROTOCOL_VERSION, dropId });
+    }
     if (f.size > MAX_CART_BYTES) throw new Error('Cartridge exceeds the 2 MiB limit.');
-    await loadCart(parseCartridgeText(await f.text()), sequence);
+    const cart = parseCartridgeText(await f.text());
+    if (!embedded && sequence !== LOAD_SEQUENCE) return;
+    if (embedded) {
+      _pmPort.postMessage({
+        type: 'cartridge-dropped',
+        version: PROTOCOL_VERSION,
+        dropId,
+        name: f.name.replace(/\.(egg|json)$/i, ''),
+        cart
+      });
+    } else {
+      await loadCart(cart, sequence);
+    }
   } catch(error) {
-    if (sequence === LOAD_SEQUENCE) setPlayerStatus(error.message || String(error), true);
+    if (embedded || sequence === LOAD_SEQUENCE) {
+      const message = error.message || String(error);
+      if (embedded && _pmPort)
+        _pmPort.postMessage({ type: 'drop-error', version: PROTOCOL_VERSION, dropId, message });
+      else setPlayerStatus(message, true);
+    }
   }
 });
 

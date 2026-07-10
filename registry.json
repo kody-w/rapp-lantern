@@ -2,7 +2,7 @@
   "schema": "hologram-registry/1.0",
   "canonicalization": "rapp-canonical-json/1",
   "summary": {
-    "cartridges": 6
+    "cartridges": 8
   },
   "entries": [
     {
@@ -52,6 +52,22 @@
       "author": "@brainstem",
       "pin_path": "eggs/original-frenzy.egg",
       "content_sha256": "c14f99615069a3f22a15e1e5894d225a2c769fb615a2985f127d4d498756c9f8"
+    },
+    {
+      "name": "atlas-star-stripe",
+      "id": "3f1de1d09cd8",
+      "title": "Aster Stripe",
+      "author": "@rapp-lantern",
+      "pin_path": "eggs/atlas-star-stripe.egg",
+      "content_sha256": "d8894a2f59a043c630195ff6f4183a0bc3802e2e22e17f333df406866a969892"
+    },
+    {
+      "name": "atlas-segment-spot",
+      "id": "48bfbc4aee2a",
+      "title": "Segment Spot Shift",
+      "author": "@rapp-lantern",
+      "pin_path": "eggs/atlas-segment-spot.egg",
+      "content_sha256": "d866d02f3bb58d6f57d5830de9416b31aae49a8a7741e003369324cfcb4f0002"
     }
   ]
 }
