@@ -8,7 +8,22 @@ const BLOCKS_M = {
   7: [{ count: 4, total: 49, data: 31 }],
   8: [{ count: 2, total: 60, data: 38 }, { count: 2, total: 61, data: 39 }],
   9: [{ count: 3, total: 58, data: 36 }, { count: 2, total: 59, data: 37 }],
-  10: [{ count: 4, total: 69, data: 43 }, { count: 1, total: 70, data: 44 }]
+  10: [{ count: 4, total: 69, data: 43 }, { count: 1, total: 70, data: 44 }],
+  11: [{ count: 1, total: 80, data: 50 }, { count: 4, total: 81, data: 51 }],
+  12: [{ count: 6, total: 58, data: 36 }, { count: 2, total: 59, data: 37 }],
+  13: [{ count: 8, total: 59, data: 37 }, { count: 1, total: 60, data: 38 }],
+  14: [{ count: 4, total: 64, data: 40 }, { count: 5, total: 65, data: 41 }],
+  15: [{ count: 5, total: 65, data: 41 }, { count: 5, total: 66, data: 42 }],
+  16: [{ count: 7, total: 73, data: 45 }, { count: 3, total: 74, data: 46 }],
+  17: [{ count: 10, total: 74, data: 46 }, { count: 1, total: 75, data: 47 }],
+  18: [{ count: 9, total: 69, data: 43 }, { count: 4, total: 70, data: 44 }],
+  19: [{ count: 3, total: 70, data: 44 }, { count: 11, total: 71, data: 45 }],
+  20: [{ count: 3, total: 67, data: 41 }, { count: 13, total: 68, data: 42 }],
+  21: [{ count: 17, total: 68, data: 42 }],
+  22: [{ count: 17, total: 74, data: 46 }],
+  23: [{ count: 4, total: 75, data: 47 }, { count: 14, total: 76, data: 48 }],
+  24: [{ count: 6, total: 73, data: 45 }, { count: 14, total: 74, data: 46 }],
+  25: [{ count: 8, total: 75, data: 47 }, { count: 13, total: 76, data: 48 }]
 };
 
 const ALIGNMENT_CENTERS = {
@@ -21,7 +36,22 @@ const ALIGNMENT_CENTERS = {
   7: [6, 22, 38],
   8: [6, 24, 42],
   9: [6, 26, 46],
-  10: [6, 28, 50]
+  10: [6, 28, 50],
+  11: [6, 30, 54],
+  12: [6, 32, 58],
+  13: [6, 34, 62],
+  14: [6, 26, 46, 66],
+  15: [6, 26, 48, 70],
+  16: [6, 26, 50, 74],
+  17: [6, 30, 54, 78],
+  18: [6, 30, 56, 82],
+  19: [6, 30, 58, 86],
+  20: [6, 34, 62, 90],
+  21: [6, 28, 50, 72, 94],
+  22: [6, 26, 50, 74, 98],
+  23: [6, 30, 54, 78, 102],
+  24: [6, 28, 54, 80, 106],
+  25: [6, 32, 58, 84, 110]
 };
 
 const GF_EXP = new Uint8Array(512);

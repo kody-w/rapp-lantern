@@ -142,14 +142,35 @@ function validateEgg(obj) {
         throw new Error(`Invalid numeric trait: ${key}.`);
     }
     if (layer.palette != null) {
-      if (!Array.isArray(layer.palette) || layer.palette.length > 64 ||
+      if (!Array.isArray(layer.palette) || !layer.palette.length || layer.palette.length > 64 ||
           layer.palette.some(color => typeof color !== 'string' || !/^#[0-9a-f]{3}(?:[0-9a-f]{3})?$/i.test(color)))
-        throw new Error('Surface palettes must contain at most 64 hex colors.');
+        throw new Error('Surface palettes must contain between 1 and 64 hex colors.');
+    }
+    const inRange = (key, min, max, integer = false) => {
+      if (layer[key] == null) return;
+      if (layer[key] < min || layer[key] > max || (integer && !Number.isInteger(layer[key])))
+        throw new Error(`Trait ${key} must be ${integer ? 'an integer ' : ''}between ${min} and ${max}.`);
+    };
+    inRange('k', 0, 100);
+    if (layer.role === 'form') {
+      if (layer.shape != null && !['blob', 'star', 'ring', 'segment'].includes(layer.shape))
+        throw new Error(`Unsupported form shape: ${layer.shape}.`);
+      if (layer.symmetry != null && !['radial', 'bilateral'].includes(layer.symmetry))
+        throw new Error(`Unsupported form symmetry: ${layer.symmetry}.`);
+      inRange('limbs', 0, 14, true); inRange('segments', 3, 24, true);
+      inRange('spikes', 0, 14, true); inRange('body_r', 0, 1); inRange('limb_len', 0, 1);
+    } else if (layer.role === 'surface') {
+      if (layer.pattern != null && !['solid', 'stripe', 'spot', 'glow'].includes(layer.pattern))
+        throw new Error(`Unsupported surface pattern: ${layer.pattern}.`);
+      inRange('glow', 0, 1); inRange('opacity', 0, 1);
+    } else if (layer.role === 'motion') {
+      for (const key of ['breathe', 'drift', 'pulse', 'reach']) inRange(key, 0, 1);
     }
   }
   const windows = obj.genome.compose && obj.genome.compose.windows;
   if (windows != null) {
-    if (!Array.isArray(windows)) throw new Error('Genome windows must be an array.');
+    if (!Array.isArray(windows) || windows.length > 32)
+      throw new Error('Genome windows must be an array with at most 32 entries.');
     let refs = 0;
     for (const windowLayers of windows) {
       if (!Array.isArray(windowLayers)) throw new Error('Each genome window must be an array.');
@@ -167,6 +188,7 @@ function restoreConfirmedPlayer() {
     type: 'load-cartridge',
     version: PROTOCOL_VERSION,
     loadId: `restore-${loadSequence}`,
+    restore: true,
     cart: confirmedCart
   });
 }

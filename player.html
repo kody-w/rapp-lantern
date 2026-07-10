@@ -30,6 +30,7 @@
  #controls{width:100%;max-width:480px;margin-top:12px;display:flex;gap:8px;flex-wrap:wrap}
  button{font:inherit;font-size:12px;cursor:pointer;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:7px;padding:5px 12px}
  button:hover{background:#30363d}
+ button:disabled{opacity:.45;cursor:default}
  button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #58a6ff;outline-offset:2px}
  button.primary{background:#238636;border-color:#238636;color:#fff}
  button.primary:hover{filter:brightness(1.1)}
@@ -88,15 +89,16 @@
    <div class="zoom">
     <button data-view="zoom-in" aria-label="Zoom in">+</button>
     <button data-view="zoom-out" aria-label="Zoom out">−</button>
+    <button id="motion-toggle" aria-label="Pause motion" aria-pressed="false">Ⅱ</button>
    </div>
   </div>
  </div>
 
  <div id="workbench" style="display:flex;flex-direction:column;gap:0;flex:1;min-width:240px">
   <div id="controls">
-   <button id="btn-dl">↓ download .egg</button>
-   <button id="btn-link">copy link</button>
-   <button id="btn-qr">QR</button>
+  <button id="btn-dl" disabled>↓ download .egg</button>
+  <button id="btn-link" disabled>copy link</button>
+  <button id="btn-qr" disabled>QR</button>
     <a class="button-link" href="index.html">gallery →</a>
   </div>
   <div id="load-row">
@@ -214,7 +216,7 @@ function addBox(faces, center, sx, sy, sz, fill, alpha = 1, tf = null) {
   const hx = sx / 2, hy = sy / 2, hz = sz / 2;
   let pts = [vec(-hx, -hy, -hz), vec(hx, -hy, -hz), vec(hx, hy, -hz), vec(-hx, hy, -hz), vec(-hx, -hy, hz), vec(hx, -hy, hz), vec(hx, hy, hz), vec(-hx, hy, hz)].map(p => V3.add(p, center));
   if (tf) pts = pts.map(p => transformPoint(p, tf));
-  [[0, 1, 2, 3], [4, 7, 6, 5], [0, 4, 5, 1], [1, 5, 6, 2], [2, 6, 7, 3], [4, 0, 3, 7]].forEach(q => pushQuad(faces, pts[q[0]], pts[q[1]], pts[q[2]], pts[q[3]], fill, alpha));
+  [[0, 1, 2, 3], [4, 7, 6, 5], [0, 4, 5, 1], [1, 5, 6, 2], [2, 6, 7, 3], [4, 0, 3, 7]].forEach(q => pushQuad(faces, pts[q[0]], pts[q[3]], pts[q[2]], pts[q[1]], fill, alpha));
 }
 function addSphere(faces, center, rx, ry, rz, latSteps, lonSteps, fillFn, alpha = 1, tf = null) {
   const latN = Math.max(4, latSteps), lonN = Math.max(6, lonSteps);
@@ -228,7 +230,7 @@ function addSphere(faces, center, rx, ry, rz, latSteps, lonSteps, fillFn, alpha 
       const p00 = P(i / latN, j / lonN), p01 = P(i / latN, (j + 1) / lonN), p10 = P((i + 1) / latN, j / lonN), p11 = P((i + 1) / latN, (j + 1) / lonN);
       const pts = [p00.p, p01.p, p11.p, p10.p].map(p => tf ? transformPoint(p, tf) : p);
       const fill = fillFn((p00.u + p01.u + p10.u + p11.u) / 4, (p00.v + p01.v + p10.v + p11.v) / 4, (p00.w + p01.w + p10.w + p11.w) / 4);
-      pushQuad(faces, pts[0], pts[1], pts[2], pts[3], fill, alpha);
+      pushQuad(faces, pts[0], pts[3], pts[2], pts[1], fill, alpha);
     }
   }
 }
@@ -244,7 +246,7 @@ function addStarBody(faces, center, size, latSteps, lonSteps, spikes, fillFn, al
       const p00 = P(i / latN, j / lonN), p01 = P(i / latN, (j + 1) / lonN), p10 = P((i + 1) / latN, j / lonN), p11 = P((i + 1) / latN, (j + 1) / lonN);
       const pts = [p00.p, p01.p, p11.p, p10.p].map(p => tf ? transformPoint(p, tf) : p);
       const fill = fillFn((p00.u + p01.u + p10.u + p11.u) / 4, (p00.v + p01.v + p10.v + p11.v) / 4, (p00.w + p01.w + p10.w + p11.w) / 4);
-      pushQuad(faces, pts[0], pts[1], pts[2], pts[3], fill, alpha);
+      pushQuad(faces, pts[0], pts[3], pts[2], pts[1], fill, alpha);
     }
   }
 }
@@ -259,7 +261,7 @@ function addTorus(faces, center, majorR, minorR, segU, segV, fillFn, alpha = 1, 
       const p00 = P(i / su, j / sv), p01 = P(i / su, (j + 1) / sv), p10 = P((i + 1) / su, j / sv), p11 = P((i + 1) / su, (j + 1) / sv);
       const pts = [p00.p, p10.p, p11.p, p01.p].map(p => tf ? transformPoint(p, tf) : p);
       const fill = fillFn((p00.u + p01.u + p10.u + p11.u) / 4, (p00.v + p01.v + p10.v + p11.v) / 4, (p00.w + p01.w + p10.w + p11.w) / 4);
-      pushQuad(faces, pts[0], pts[1], pts[2], pts[3], fill, alpha);
+      pushQuad(faces, pts[0], pts[3], pts[2], pts[1], fill, alpha);
     }
   }
 }
@@ -285,41 +287,48 @@ function addCylinder(faces, from, to, r0, r1, steps, fillFn, alpha = 1, cap0 = t
 }
 function bodyTransform(spec, time) {
   const drift = spec.motion.drift || 0;
+  const reach = spec.motion.reach || 0;
   const sway = drift * 0.18 * Math.sin(time * 0.55);
   return {
     pos: vec(0, drift * 0.12 * Math.cos(time * 0.6), 0),
-    rot: vec(drift * 0.06 * Math.sin(time * 0.5), spec.motion.reach * 0.14 * Math.sin(time * 0.45), sway),
+    rot: vec(drift * 0.06 * Math.sin(time * 0.5), reach * 0.14 * Math.sin(time * 0.45), sway),
     scale: vec(1, 1, 1)
   };
 }
-function readGenome(genome, time) {
+function readGenome(genome, time, forcedWindow = null) {
   const layers = genome.layers || [], compose = genome.compose || {}, windows = compose.windows || [];
-  const winIdx = windows.length > 1 && compose.loop ? Math.floor(time / 1.8) % windows.length : 0;
-  const active = new Set(windows[winIdx] || []);
+  const winIdx = forcedWindow == null
+    ? (windows.length > 1 && compose.loop ? Math.floor(time / 1.8) % windows.length : 0)
+    : forcedWindow;
+  const active = windows.length ? new Set(windows[winIdx] || []) : null;
   const byRole = {};
-  layers.forEach((l, i) => { if (!byRole[l.role] || active.has(i)) byRole[l.role] = l; });
+  layers.forEach((layer, index) => {
+    if (active && !active.has(index)) return;
+    if (!byRole[layer.role]) byRole[layer.role] = layer;
+  });
   const form = byRole.form || {};
   const surface = byRole.surface || {};
   const motion = byRole.motion || {};
-  const breathe = (motion.breathe || 0) * Math.sin(time * TAU * 0.65);
-  const pulseAmt = motion.pulse || 0;
+  const breathe = (motion.breathe ?? 0) * Math.sin(time * TAU * 0.65);
+  const pulseAmt = motion.pulse ?? 0;
   const pulse = pulseAmt * (0.5 + 0.5 * Math.sin(time * TAU * Math.max(pulseAmt, 0.2) * 1.3));
-  const size = 1.1 + (form.body_r || 0.25) * 2.7;
+  const size = 1.1 + (form.body_r ?? 0.25) * 2.7;
   return {
     form,
-    surface: { palette: surface.palette || ['#4488ff', '#2255cc'], pattern: surface.pattern || 'solid', glow: surface.glow || 0, opacity: surface.opacity == null ? 1 : surface.opacity },
+    surface: { palette: surface.palette || ['#4488ff', '#2255cc'], pattern: surface.pattern || 'solid', glow: surface.glow ?? 0, opacity: surface.opacity == null ? 1 : surface.opacity },
     motion,
     size: size * (1 + breathe * 0.18),
-    limbLen: 0.5 + (form.limb_len || 0.3) * 2.6,
-    segments: clamp(Math.round(form.segments || 6), 3, 14),
-    limbs: clamp(Math.round(form.limbs || 0), 0, 14),
+    limbLen: 0.5 + (form.limb_len ?? 0.3) * 2.6,
+    segments: clamp(Math.round(form.segments ?? 6), 3, 24),
+    limbs: clamp(Math.round(form.limbs ?? 0), 0, 14),
+    spikes: clamp(Math.round(form.spikes ?? 0), 0, 14),
     pulse,
     breathe
   };
 }
 function buildCreatureFaces(spec, time) {
   const faces = [];
-  const { form, surface, motion, size, limbLen, limbs, segments, pulse } = spec;
+  const { form, surface, motion, size, limbLen, limbs, segments, spikes, pulse } = spec;
   const shape = form.shape || 'blob';
   const symmetry = form.symmetry || 'radial';
   const tf = bodyTransform(spec, time);
@@ -339,7 +348,7 @@ function buildCreatureFaces(spec, time) {
         addCylinder(faces, transformPoint(anchor, tf), transformPoint(foot, tf), size * 0.085, size * 0.045, 8, limbFill, surface.opacity, false, false);
       }
     } else {
-      const pairs = Math.max(1, Math.ceil(limbs / 2));
+      const pairs = Math.floor(limbs / 2);
       for (let i = 0; i < pairs; i++) {
         const x = pairs === 1 ? 0 : lerp(-size * 0.45, size * 0.38, i / (pairs - 1));
         const wag = (motion.reach || 0) * 0.28 * Math.sin(time * 2.6 + i * 1.3);
@@ -370,7 +379,7 @@ function buildCreatureFaces(spec, time) {
     }
   }
 
-  const spikeCount = shape === 'star' ? Math.max(0, Math.round(segments / 2)) : Math.max(1, Math.min(10, segments - 1));
+  const spikeCount = spikes;
   if (spikeCount > 0 && shape !== 'ring') {
     for (let i = 0; i < spikeCount; i++) {
       const frac = spikeCount === 1 ? 0.5 : i / (spikeCount - 1);
@@ -381,11 +390,13 @@ function buildCreatureFaces(spec, time) {
   }
 
   const headPos = vec(shape === 'ring' ? size * 1.0 : size * 0.98, bodyY + size * 0.12, 0);
-  addBox(faces, transformPoint(headPos, tf), size * 0.56, size * 0.44, size * 0.42, headFill(0.8, 0.5, 0.5), surface.opacity);
+  addBox(faces, headPos, size * 0.56, size * 0.44, size * 0.42, headFill(0.8, 0.5, 0.5), surface.opacity, tf);
   addSphere(faces, transformPoint(vec(headPos.x + size * 0.33, headPos.y + size * 0.06, size * 0.11), tf), size * 0.08, size * 0.08, size * 0.08, 5, 8, () => patternSample(surface.pattern, surface.palette, 0.5, 0.5, 0.5, pulse, 'eye'), Math.min(1, surface.opacity + 0.12));
   addSphere(faces, transformPoint(vec(headPos.x + size * 0.33, headPos.y + size * 0.06, -size * 0.11), tf), size * 0.08, size * 0.08, size * 0.08, 5, 8, () => patternSample(surface.pattern, surface.palette, 0.5, 0.5, 0.5, pulse, 'eye'), Math.min(1, surface.opacity + 0.12));
 
-  return { faces, bodyY, floorY: bodyY - (limbLen + size * 0.72), haloY: bodyY, size };
+  const geometryFloor = Math.min(...faces.flatMap(face => face.pts.map(point => point.y)));
+  const floorY = geometryFloor - (limbs > 1 ? size * 0.02 : size * 0.08);
+  return { faces, bodyY, floorY, haloCenter: transformPoint(vec(0, bodyY, 0), tf), size };
 }
 function makeCamera(target, yaw, pitch, radius) {
   const cp = Math.cos(pitch), sp = Math.sin(pitch);
@@ -401,6 +412,44 @@ function projectPoint(p, camera, w, h, focal) {
   if (z <= 0.08) return null;
   const s = focal / z;
   return { x: w / 2 + x * s, y: h / 2 - y * s, z };
+}
+function includeSceneBounds(bounds, faces) {
+  for (const face of faces) for (const point of face.pts) {
+    bounds.min.x = Math.min(bounds.min.x, point.x); bounds.min.y = Math.min(bounds.min.y, point.y); bounds.min.z = Math.min(bounds.min.z, point.z);
+    bounds.max.x = Math.max(bounds.max.x, point.x); bounds.max.y = Math.max(bounds.max.y, point.y); bounds.max.z = Math.max(bounds.max.z, point.z);
+  }
+}
+function finishSceneBounds(bounds) {
+  const center = vec(
+    (bounds.min.x + bounds.max.x) / 2,
+    (bounds.min.y + bounds.max.y) / 2,
+    (bounds.min.z + bounds.max.z) / 2
+  );
+  const radius = V3.len(V3.sub(bounds.max, bounds.min)) / 2;
+  return { center, radius: Math.max(radius, 1) };
+}
+function measureScene(faces) {
+  const bounds = { min: vec(Infinity, Infinity, Infinity), max: vec(-Infinity, -Infinity, -Infinity) };
+  includeSceneBounds(bounds, faces);
+  return finishSceneBounds(bounds);
+}
+const FRAME_BOUNDS = new WeakMap();
+function framingBounds(genome) {
+  if (!FRAME_BOUNDS.has(genome)) {
+    const compose = genome.compose || {};
+    const windows = Array.isArray(compose.windows) ? compose.windows : [];
+    const windowCount = compose.loop && windows.length > 1 ? windows.length : 1;
+    const bounds = { min: vec(Infinity, Infinity, Infinity), max: vec(-Infinity, -Infinity, -Infinity) };
+    const seenWindows = new Set();
+    for (let index = 0; index < windowCount; index++) {
+      const signature = JSON.stringify(windows[index] || []);
+      if (seenWindows.has(signature)) continue;
+      seenWindows.add(signature);
+      includeSceneBounds(bounds, buildCreatureFaces(readGenome(genome, 0, index), 0).faces);
+    }
+    FRAME_BOUNDS.set(genome, finishSceneBounds(bounds));
+  }
+  return FRAME_BOUNDS.get(genome);
 }
 function drawShadow(ctx, camera, w, h, focal, floorY, size) {
   const pts = [];
@@ -420,7 +469,7 @@ function drawHalo(ctx, camera, w, h, focal, center, size, surface, pulse) {
   if ((surface.glow || 0) <= 0.03) return;
   const cp = projectPoint(center, camera, w, h, focal);
   if (!cp) return;
-  const edge = projectPoint(V3.add(center, vec(size * 1.15, 0, 0)), camera, w, h, focal);
+  const edge = projectPoint(V3.add(center, V3.scale(camera.right, size * 1.15)), camera, w, h, focal);
   if (!edge) return;
   const rr = Math.max(20, Math.hypot(edge.x - cp.x, edge.y - cp.y) * (1.2 + surface.glow * 0.7));
   const g = ctx.createRadialGradient(cp.x, cp.y, rr * 0.18, cp.x, cp.y, rr);
@@ -441,13 +490,14 @@ function renderScene(ctx, genome, time, view) {
 
   const spec = readGenome(genome, time);
   const built = buildCreatureFaces(spec, time);
+  const bounds = framingBounds(genome);
   const yaw = view.yaw + (view.autoOrbit || 0);
   const pitch = clamp(view.pitch, -0.85, 0.92);
-  const radius = (3.5 + built.size * 1.12) / clamp(view.zoom, 0.72, 1.9);
-  const target = vec(0, built.haloY * 0.72, 0);
+  const radius = Math.max(3.5, bounds.radius * 3.4) / clamp(view.zoom, 0.72, 1.9);
+  const target = bounds.center;
   const camera = makeCamera(target, yaw, pitch, radius);
   const focal = Math.min(w, h) * 0.96;
-  drawHalo(ctx, camera, w, h, focal, vec(0, built.haloY, 0), built.size, spec.surface, spec.pulse);
+  drawHalo(ctx, camera, w, h, focal, built.haloCenter, built.size, spec.surface, spec.pulse);
   drawShadow(ctx, camera, w, h, focal, built.floorY, built.size);
 
   const lightDir = V3.norm(vec(0.45, 0.9, 0.65));
@@ -459,7 +509,9 @@ function renderScene(ctx, genome, time, view) {
     const normal = V3.norm(V3.cross(V3.sub(b, a), V3.sub(c, a)));
     const center = V3.mid(face.pts);
     const diffuse = Math.max(0, V3.dot(normal, lightDir));
-    const viewDot = Math.max(0, V3.dot(normal, V3.norm(V3.sub(camera.pos, center))));
+    const facing = V3.dot(normal, V3.norm(V3.sub(camera.pos, center)));
+    if (face.alpha >= 0.995 && facing <= 0) continue;
+    const viewDot = Math.max(0, facing);
     const lit = 0.26 + diffuse * 0.76 + viewDot * 0.12 + (face.fill.emissive || 0) * 0.35;
     polys.push({ proj, depth: proj.reduce((acc, p) => acc + p.z, 0) / proj.length, fill: colorCss(scaleColor(face.fill.color, lit), face.alpha) });
   }
@@ -547,14 +599,35 @@ function validateCartridge(cart) {
         throw new Error(`Invalid numeric trait: ${key}.`);
     }
     if (layer.palette != null) {
-      if (!Array.isArray(layer.palette) || layer.palette.length > 64 ||
+      if (!Array.isArray(layer.palette) || !layer.palette.length || layer.palette.length > 64 ||
           layer.palette.some(color => typeof color !== 'string' || !/^#[0-9a-f]{3}(?:[0-9a-f]{3})?$/i.test(color)))
-        throw new Error('Surface palettes must contain at most 64 hex colors.');
+        throw new Error('Surface palettes must contain between 1 and 64 hex colors.');
+    }
+    const inRange = (key, min, max, integer = false) => {
+      if (layer[key] == null) return;
+      if (layer[key] < min || layer[key] > max || (integer && !Number.isInteger(layer[key])))
+        throw new Error(`Trait ${key} must be ${integer ? 'an integer ' : ''}between ${min} and ${max}.`);
+    };
+    inRange('k', 0, 100);
+    if (layer.role === 'form') {
+      if (layer.shape != null && !['blob', 'star', 'ring', 'segment'].includes(layer.shape))
+        throw new Error(`Unsupported form shape: ${layer.shape}.`);
+      if (layer.symmetry != null && !['radial', 'bilateral'].includes(layer.symmetry))
+        throw new Error(`Unsupported form symmetry: ${layer.symmetry}.`);
+      inRange('limbs', 0, 14, true); inRange('segments', 3, 24, true);
+      inRange('spikes', 0, 14, true); inRange('body_r', 0, 1); inRange('limb_len', 0, 1);
+    } else if (layer.role === 'surface') {
+      if (layer.pattern != null && !['solid', 'stripe', 'spot', 'glow'].includes(layer.pattern))
+        throw new Error(`Unsupported surface pattern: ${layer.pattern}.`);
+      inRange('glow', 0, 1); inRange('opacity', 0, 1);
+    } else if (layer.role === 'motion') {
+      for (const key of ['breathe', 'drift', 'pulse', 'reach']) inRange(key, 0, 1);
     }
   }
   const windows = cart.genome.compose && cart.genome.compose.windows;
   if (windows != null) {
-    if (!Array.isArray(windows)) throw new Error('Genome windows must be an array.');
+    if (!Array.isArray(windows) || windows.length > 32)
+      throw new Error('Genome windows must be an array with at most 32 entries.');
     let refs = 0;
     for (const windowLayers of windows) {
       if (!Array.isArray(windowLayers)) throw new Error('Each genome window must be an array.');
@@ -596,15 +669,29 @@ async function readBounded(response) {
 const DEFAULT_CART = {"schema":"hologram-cartridge/1.0","id":"d45a79d29e99","title":"Lumina","author":"@kody-w","born":{"coord":"0,0","from":"genesis"},"parents":[],"genome":{"layers":[{"role":"form","k":30,"shape":"blob","limbs":0,"segments":8,"symmetry":"radial","body_r":0.3,"limb_len":0},{"role":"surface","k":85,"palette":["#00ccff","#0088ff","#ffffff","#aaddff"],"pattern":"glow","glow":0.8,"opacity":0.85},{"role":"motion","k":60,"breathe":0.2,"drift":0.5,"pulse":0.8,"reach":0}],"compose":{"windows":[[0,1,2]],"loop":true}},"sig":""};
 
 /* ── State ────────────────────────────────────────────────────────────────── */
-let CART = null, RAF = null, T0 = null, _pmPort = null;
+let CART = null, RAF = null, _pmPort = null;
 let LOAD_SEQUENCE = 0, activeFetch = null;
+let CURRENT_GENOME_ID = null;
+const RENDER_STATES = new Map();
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const stageEl = document.getElementById('stage');
 const verEl = document.getElementById('verify');
 const orbitHintEl = document.getElementById('orbit-hint');
 const playerStatusEl = document.getElementById('player-status');
-const VIEW = { yaw: 0.85, pitch: 0.22, zoom: 1.0, dragging: false, autoOrbit: 0, userMoved: false, lastTs: null, activePointer: null };
+const motionToggleEl = document.getElementById('motion-toggle');
+const reducedMotionQuery = matchMedia('(prefers-reduced-motion: reduce)');
+const VIEW = { yaw: 0.85, pitch: 0.22, zoom: 1.0, dragging: false, autoOrbit: 0, userMoved: false, activePointer: null };
+const MOTION = {
+  time: 0,
+  lastTs: null,
+  userPaused: false,
+  reduced: reducedMotionQuery.matches,
+  visible: !document.hidden,
+  onscreen: true,
+  genomeMoves: true,
+  disposed: false
+};
 
 function setPlayerStatus(message, error = false) {
   playerStatusEl.textContent = message || '';
@@ -617,6 +704,100 @@ function clearShareArtifacts() {
   document.getElementById('qr-link').textContent = '';
   document.getElementById('share-fallback').hidden = true;
   document.getElementById('share-url').value = '';
+}
+
+function setOutputActionsEnabled(enabled) {
+  for (const id of ['btn-dl', 'btn-link', 'btn-qr'])
+    document.getElementById(id).disabled = !enabled;
+}
+
+function showSourceError(message) {
+  cancelScheduledFrame();
+  CART = null;
+  clearShareArtifacts();
+  setOutputActionsEnabled(false);
+  verEl.style.display = 'none';
+  document.getElementById('i-title').textContent = 'Could not verify this egg';
+  document.getElementById('i-title').style.color = '#f85149';
+  document.getElementById('i-author').textContent = '';
+  document.getElementById('i-id').textContent = '';
+  canvas.setAttribute('aria-label', `Hologram unavailable. ${message}`);
+  ctx.fillStyle = '#010409';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  document.title = 'egg unavailable — rapp-lantern';
+  setPlayerStatus(message, true);
+}
+
+function genomeHasMotion(genome) {
+  const compose = genome.compose || {};
+  const windows = Array.isArray(compose.windows) ? compose.windows : [];
+  const activeIndexes = windows.length
+    ? new Set(compose.loop && windows.length > 1 ? windows.flat() : windows[0])
+    : null;
+  const motionLayers = genome.layers.filter((layer, index) =>
+    layer.role === 'motion' && (!activeIndexes || activeIndexes.has(index)));
+  const moves = motionLayers.some(layer =>
+    ['breathe', 'drift', 'pulse', 'reach'].some(key => Math.abs(layer[key] || 0) > 0.0001));
+  return moves || Boolean(compose.loop && windows.length > 1);
+}
+
+function animationActive() {
+  return !MOTION.userPaused && !MOTION.reduced && (MOTION.genomeMoves || !VIEW.userMoved);
+}
+
+function updateMotionButton() {
+  const paused = MOTION.userPaused || MOTION.reduced;
+  motionToggleEl.textContent = paused ? '▶' : 'Ⅱ';
+  motionToggleEl.setAttribute('aria-pressed', String(paused));
+  motionToggleEl.setAttribute('aria-label', MOTION.reduced ? 'Motion paused by reduced-motion preference' : (paused ? 'Resume motion' : 'Pause motion'));
+}
+
+function cancelScheduledFrame() {
+  if (RAF) cancelAnimationFrame(RAF);
+  RAF = null;
+  MOTION.lastTs = null;
+}
+
+function requestRender() {
+  if (!CART || RAF || MOTION.disposed || !MOTION.visible || !MOTION.onscreen) return;
+  RAF = requestAnimationFrame(renderFrame);
+}
+
+function renderFrame(timestamp) {
+  RAF = null;
+  if (!CART || !MOTION.visible || !MOTION.onscreen) {
+    MOTION.lastTs = null;
+    return;
+  }
+  const active = animationActive();
+  const dt = MOTION.lastTs == null ? 0 : Math.min(0.1, Math.max(0, (timestamp - MOTION.lastTs) / 1000));
+  MOTION.lastTs = timestamp;
+  if (active) {
+    MOTION.time += dt;
+    if (!VIEW.dragging && !VIEW.userMoved) VIEW.autoOrbit += dt * 0.32;
+  }
+  renderScene(ctx, CART.genome, MOTION.time, VIEW);
+  if (active) requestRender();
+  else MOTION.lastTs = null;
+}
+
+function invalidateRender() {
+  requestRender();
+}
+
+function rememberRenderState() {
+  if (!CART || !CURRENT_GENOME_ID) return;
+  RENDER_STATES.set(CURRENT_GENOME_ID, {
+    time: MOTION.time,
+    view: {
+      yaw: VIEW.yaw,
+      pitch: VIEW.pitch,
+      zoom: VIEW.zoom,
+      autoOrbit: VIEW.autoOrbit,
+      userMoved: VIEW.userMoved
+    }
+  });
+  if (RENDER_STATES.size > 8) RENDER_STATES.delete(RENDER_STATES.keys().next().value);
 }
 
 function beginLoad() {
@@ -653,13 +834,14 @@ function resizeCanvas() {
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width;
     canvas.height = height;
+    invalidateRender();
   }
 }
 if ('ResizeObserver' in window) new ResizeObserver(resizeCanvas).observe(stageEl);
 else window.addEventListener('resize', resizeCanvas);
 requestAnimationFrame(resizeCanvas);
 
-async function loadCart(input, sequence = beginLoad()) {
+async function loadCart(input, sequence = beginLoad(), options = {}) {
   const cart = validateCartridge(input);
   const got = await genomeId(cart.genome);
   if (sequence !== LOAD_SEQUENCE) return null;
@@ -669,8 +851,12 @@ async function loadCart(input, sequence = beginLoad()) {
   const serialized = JSON.stringify(cart, null, 2);
   const description = describeCartridge(cart, got, match);
   const pageTitle = `${cart.title || 'hologram'} — rapp-lantern`;
+  rememberRenderState();
+  const restoredState = options.restore ? RENDER_STATES.get(got) : null;
   CART = cart;
+  CURRENT_GENOME_ID = got;
   clearShareArtifacts();
+  setOutputActionsEnabled(true);
   verEl.style.display = 'block';
   if (trust === 'verified') {
     verEl.textContent = got + ' ✓';
@@ -690,27 +876,59 @@ async function loadCart(input, sequence = beginLoad()) {
   document.getElementById('cart-json').value = serialized;
   canvas.setAttribute('aria-label', description);
   document.title = pageTitle;
-  VIEW.autoOrbit = 0;
-  VIEW.userMoved = false;
+  if (restoredState) {
+    Object.assign(VIEW, restoredState.view, { dragging: false, activePointer: null });
+    MOTION.time = restoredState.time;
+  } else {
+    VIEW.autoOrbit = 0;
+    VIEW.userMoved = false;
+  }
   setPlayerStatus(`Loaded ${cart.title || 'organism'}.`);
-  startAnim();
+  startAnim({ resetTime: !restoredState });
   return { id: got, declared, match, trust };
 }
 
-function startAnim() {
-  if (RAF) cancelAnimationFrame(RAF);
-  T0 = null;
-  VIEW.lastTs = null;
-  function frame(ts) {
-    if (!T0) T0 = ts;
-    const time = (ts - T0) / 1000;
-    const dt = VIEW.lastTs == null ? 0 : (ts - VIEW.lastTs) / 1000;
-    VIEW.lastTs = ts;
-    if (!VIEW.dragging && !VIEW.userMoved) VIEW.autoOrbit += dt * 0.32;
-    if (CART) renderScene(ctx, CART.genome, time, VIEW);
-    RAF = requestAnimationFrame(frame);
+function startAnim({ resetTime = true } = {}) {
+  cancelScheduledFrame();
+  if (resetTime) MOTION.time = 0;
+  MOTION.genomeMoves = genomeHasMotion(CART.genome);
+  updateMotionButton();
+  invalidateRender();
+}
+
+motionToggleEl.addEventListener('click', () => {
+  if (MOTION.reduced) {
+    setPlayerStatus('Motion remains paused while reduced motion is enabled.');
+    return;
   }
-  RAF = requestAnimationFrame(frame);
+  MOTION.userPaused = !MOTION.userPaused;
+  cancelScheduledFrame();
+  updateMotionButton();
+  invalidateRender();
+  setPlayerStatus(MOTION.userPaused ? 'Motion paused.' : 'Motion resumed.');
+});
+
+const handleReducedMotion = event => {
+  MOTION.reduced = event.matches;
+  cancelScheduledFrame();
+  updateMotionButton();
+  invalidateRender();
+};
+if (reducedMotionQuery.addEventListener) reducedMotionQuery.addEventListener('change', handleReducedMotion);
+else if (reducedMotionQuery.addListener) reducedMotionQuery.addListener(handleReducedMotion);
+
+if (document.addEventListener) document.addEventListener('visibilitychange', () => {
+  MOTION.visible = !document.hidden;
+  cancelScheduledFrame();
+  if (MOTION.visible) invalidateRender();
+});
+
+if ('IntersectionObserver' in window) {
+  new IntersectionObserver(entries => {
+    MOTION.onscreen = entries.some(entry => entry.isIntersecting);
+    cancelScheduledFrame();
+    if (MOTION.onscreen) invalidateRender();
+  }, { threshold: 0.01 }).observe(stageEl);
 }
 
 /* ── Loader ───────────────────────────────────────────────────────────────── */
@@ -806,32 +1024,48 @@ async function resolveAndLoad(input) {
 /* ── Boot ─────────────────────────────────────────────────────────────────── */
 (async () => {
   const p = new URLSearchParams(location.search);
-  const hash = (location.hash || '').slice(1);
+  const hashPresent = location.href.includes('#');
+  const hash = hashPresent ? location.href.slice(location.href.indexOf('#') + 1) : '';
+  const cartParams = p.getAll('cart');
+  const idParams = p.getAll('id');
+  const hashParams = p.getAll('h');
+  const sourceCount = Number(hashPresent) + Number(cartParams.length > 0) + Number(idParams.length > 0);
+  const explicitSource = sourceCount > 0 || hashParams.length > 0;
   const bootSequence = beginLoad();
   let cart = null, bootError = '';
 
-  if (hash) {
+  if (sourceCount > 1 || cartParams.length > 1 || idParams.length > 1 || hashParams.length > 1)
+    bootError = 'A shared link must contain exactly one egg source.';
+  else if (hashParams.length && !idParams.length)
+    bootError = 'A registry content hash must be paired with an id.';
+  else if (hashPresent && !hash)
+    bootError = 'The shared egg fragment is empty.';
+
+  if (!bootError && hashPresent) {
     try { cart = JSON.parse(b64dec(hash)); }
     catch (error) { bootError = `Shared egg link is invalid: ${error.message}`; }
   }
-  if (!cart && p.has('cart')) {
-    try { cart = await loadFromUrl(p.get('cart'), bootSequence); }
+  if (!bootError && !cart && cartParams.length) {
+    try { cart = await loadFromUrl(cartParams[0], bootSequence); }
     catch (error) {
       if (bootSequence !== LOAD_SEQUENCE) return;
       bootError = error.message || String(error);
     }
   }
-  if (!cart && p.has('id')) {
+  if (!bootError && !cart && idParams.length) {
     try {
       const reg = await getRegistry();
       if (bootSequence !== LOAD_SEQUENCE) return;
-      const entry = (reg.entries || []).find(e => e.name === p.get('id') || e.id === p.get('id'));
-      if (!entry) throw new Error(`No registry entry matches "${p.get('id')}".`);
-      const expectedContentId = p.get('h') && p.get('h').toLowerCase();
+      const expectedContentId = hashParams.length ? hashParams[0].toLowerCase() : null;
       if (expectedContentId && !/^[0-9a-f]{64}$/i.test(expectedContentId))
         throw new Error('The registry content hash in this link is invalid.');
+      if (hashParams.length && !expectedContentId)
+        throw new Error('The registry content hash in this link is empty.');
+      const entry = (reg.entries || []).find(candidate =>
+        candidate.name === idParams[0] || candidate.id === idParams[0]);
+      if (!entry) throw new Error(`No registry entry matches "${idParams[0]}".`);
       if (expectedContentId && expectedContentId !== entry.content_sha256)
-        throw new Error(`Registry entry "${entry.name}" no longer matches this shared link.`);
+        throw new Error(`Registry entry "${entry.name}" does not match this shared link.`);
       cart = await loadFromUrl(new URL(entry.pin_path, location.href).href, bootSequence);
       if (bootSequence !== LOAD_SEQUENCE) return;
       const actualContentId = await cartridgeContentId(cart);
@@ -844,13 +1078,21 @@ async function resolveAndLoad(input) {
     }
   }
   if (bootSequence !== LOAD_SEQUENCE) return;
-  if (!cart) cart = DEFAULT_CART;
+  if (bootError && explicitSource) {
+    showSourceError(bootError);
+    return;
+  }
+  if (!explicitSource && !cart) cart = DEFAULT_CART;
 
   try {
     await loadCart(cart, bootSequence);
   } catch (error) {
     if (bootSequence !== LOAD_SEQUENCE) return;
     bootError = error.message || String(error);
+    if (explicitSource) {
+      showSourceError(bootError);
+      return;
+    }
     if (cart !== DEFAULT_CART) await loadCart(DEFAULT_CART, bootSequence);
   }
   if (bootSequence === LOAD_SEQUENCE && bootError)
@@ -929,6 +1171,7 @@ document.getElementById('file-in').onchange = async e => {
 function markOrbitInteraction() {
   VIEW.userMoved = true;
   orbitHintEl.classList.add('hide');
+  invalidateRender();
 }
 function orbitDown(x, y) {
   VIEW.dragging = true;
@@ -943,6 +1186,7 @@ function orbitMove(x, y) {
   VIEW.lastX = x; VIEW.lastY = y;
   VIEW.yaw -= dx * 0.0105;
   VIEW.pitch = clamp(VIEW.pitch + dy * 0.0075, -0.85, 0.92);
+  invalidateRender();
 }
 function orbitUp() {
   VIEW.dragging = false;
@@ -1079,7 +1323,7 @@ document.getElementById('btn-qr').onclick = async () => {
 // replies with a load-scoped rendered/error event plus legacy trust events.
 async function handleIncomingCartridge(message, send) {
   try {
-    const result = await loadCart(message.cart);
+    const result = await loadCart(message.cart, undefined, { restore: Boolean(message.restore) });
     if (!result) {
       send({ type: 'error', version: PROTOCOL_VERSION, loadId: message.loadId, message: 'Load was superseded by a newer cartridge.' });
       return;
@@ -1106,14 +1350,15 @@ function handleProtocolMessage(message, send, dispose) {
     return;
   }
   if (message.type === 'dispose') {
+    MOTION.disposed = true;
     beginLoad();
-    if (RAF) cancelAnimationFrame(RAF);
-    RAF = null;
+    cancelScheduledFrame();
     send({ type: 'disposed', version: PROTOCOL_VERSION });
     dispose && dispose();
     return;
   }
   if (message.type === 'load-cartridge' && message.cart) {
+    MOTION.disposed = false;
     handleIncomingCartridge(message, send);
   }
 }
@@ -1134,6 +1379,7 @@ window.addEventListener('message', e => {
       _pmPort.onmessage = null;
       _pmPort.close();
     }
+    MOTION.disposed = false;
     _pmPort = port;
     const send = response => port.postMessage(response);
     const dispose = () => {
@@ -1150,6 +1396,7 @@ window.addEventListener('message', e => {
       version: PROTOCOL_VERSION,
       capabilities: ['load-cartridge', 'cancel-loads', 'dispose', 'transactional-render']
     });
+    invalidateRender();
     return;
   }
   const targetOrigin = e.origin === 'null' ? '*' : e.origin;

@@ -6,7 +6,7 @@ The universal player for **holographic organisms**. Drop in *any* `.egg` and orb
 
 ## What's an `.egg`?
 
-An `.egg` is a [`hologram-cartridge/1.0`](https://github.com/kody-w/rapp-static-apis) JSON — a self-describing, content-addressed organism with a layered genome (**form / surface / motion**). The player interprets it with **zero per-species code**, so the same lantern renders a weather sky, the moon, a crossbred hybrid, or an original box-creature identically well — as a 3D form you drag to orbit. Visible controls and the arrow/WASD, `+`/`-`, and Home keys provide complete orbit, zoom, and reset access.
+An `.egg` is a [`hologram-cartridge/1.0`](https://github.com/kody-w/rapp-static-apis) JSON — a self-describing, content-addressed organism with a layered genome (**form / surface / motion**). The player interprets it with **zero per-species code**, so the same lantern renders a weather sky, the moon, a crossbred hybrid, or an original box-creature identically well — as a 3D form you drag to orbit. Visible controls and the arrow/WASD, `+`/`-`, and Home keys provide complete orbit, zoom, reset, and pause access.
 
 `.egg` is just JSON; the extension is a hint. Any valid `hologram-cartridge/1.0` loads.
 
@@ -22,7 +22,11 @@ An `.egg` is a [`hologram-cartridge/1.0`](https://github.com/kody-w/rapp-static-
 
 Every load path validates the cartridge before replacing the current organism. Remote loads are limited to HTTP(S), 2 MiB, and 15 seconds; malformed or stale loads leave the current scene intact.
 
-Copy-link and QR actions use registry URLs bound to the complete cartridge hash when a specimen matches `registry.json`; imported eggs use self-contained hash links within safe browser/QR limits. Oversized eggs remain downloadable instead of generating unreliable links.
+Shared player URLs accept exactly one source: a fragment, `cart`, or `id` plus its optional content hash. Ambiguous or unverifiable links fail closed instead of substituting another organism.
+
+Copy-link and QR actions use registry URLs bound to the complete cartridge hash when a specimen matches `registry.json`; imported eggs use self-contained hash links. The local QR encoder supports payloads through 997 bytes, while larger eggs remain downloadable instead of generating unreliable codes.
+
+Animation pauses while hidden or offscreen, preserves its logical clock when resumed, and honors live `prefers-reduced-motion` changes. Manual orbit and zoom continue to redraw in reduced-motion or paused mode.
 
 ## Make eggs
 
