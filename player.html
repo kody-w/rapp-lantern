@@ -136,6 +136,8 @@ const TAU = Math.PI * 2;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const lerp = (a, b, t) => a + (b - a) * t;
 const fract = v => v - Math.floor(v);
+const DEFAULT_PALETTE = ['#4488ff', '#2255cc'];
+const PALETTE_CACHE = new WeakMap();
 
 const V3 = {
   add: (a, b) => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }),
@@ -176,17 +178,22 @@ function scaleColor(c, s) {
   return { r: clamp(c.r * s, 0, 255), g: clamp(c.g * s, 0, 255), b: clamp(c.b * s, 0, 255) };
 }
 function paletteSample(palette, t) {
-  const list = (palette && palette.length ? palette : ['#4488ff', '#2255cc']).map(parseHex);
+  const source = palette && palette.length ? palette : DEFAULT_PALETTE;
+  let list = PALETTE_CACHE.get(source);
+  if (!list) {
+    list = source.map(parseHex);
+    PALETTE_CACHE.set(source, list);
+  }
   if (list.length === 1) return list[0];
   const x = clamp(t, 0, 1) * (list.length - 1);
   const i = Math.floor(x), f = x - i;
   return mixColor(list[i], list[Math.min(i + 1, list.length - 1)], f);
 }
 function patternSample(pattern, palette, u, v, w, pulse, part = 'body') {
+  if (part === 'eye') return { color: { r: 255, g: 244, b: 200 }, emissive: 1.15 };
   const base = paletteSample(palette, fract(u * 0.35 + 0.5));
   const alt = paletteSample(palette, fract(v * 0.35 + 0.5));
   const hi = paletteSample(palette, fract(w * 0.35 + 0.5));
-  if (part === 'eye') return { color: { r: 255, g: 244, b: 200 }, emissive: 1.15 };
   if (part === 'limb') {
     const t = 0.45 + 0.35 * Math.sin(u * 4.5 + v * 2.2);
     return { color: mixColor(base, alt, t), emissive: pattern === 'glow' ? 0.22 + pulse * 0.15 : 0.05 };
@@ -315,7 +322,7 @@ function readGenome(genome, time, forcedWindow = null) {
   const size = 1.1 + (form.body_r ?? 0.25) * 2.7;
   return {
     form,
-    surface: { palette: surface.palette || ['#4488ff', '#2255cc'], pattern: surface.pattern || 'solid', glow: surface.glow ?? 0, opacity: surface.opacity == null ? 1 : surface.opacity },
+    surface: { palette: surface.palette && surface.palette.length ? surface.palette : DEFAULT_PALETTE, pattern: surface.pattern || 'solid', glow: surface.glow ?? 0, opacity: surface.opacity == null ? 1 : surface.opacity },
     motion,
     size: size * (1 + breathe * 0.18),
     limbLen: 0.5 + (form.limb_len ?? 0.3) * 2.6,
@@ -442,7 +449,7 @@ function framingBounds(genome) {
     const bounds = { min: vec(Infinity, Infinity, Infinity), max: vec(-Infinity, -Infinity, -Infinity) };
     const seenWindows = new Set();
     for (let index = 0; index < windowCount; index++) {
-      const signature = JSON.stringify(windows[index] || []);
+      const signature = [...(windows[index] || [])].sort((a, b) => a - b).join(',');
       if (seenWindows.has(signature)) continue;
       seenWindows.add(signature);
       includeSceneBounds(bounds, buildCreatureFaces(readGenome(genome, 0, index), 0).faces);
@@ -529,12 +536,50 @@ async function sha256hex(str) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2,'0')).join('');
 }
-function canonicalJson(value) {
+function hasWellFormedUnicode(value) {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(++index);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+    } else if (code >= 0xdc00 && code <= 0xdfff) return false;
+  }
+  return true;
+}
+function canonicalJson(value, stack = new Set()) {
   // rapp-canonical-json/1: UTF-16 key order with ECMAScript JSON primitive serialization.
-  if (Array.isArray(value)) return '[' + value.map(canonicalJson).join(',') + ']';
-  if (value !== null && typeof value === 'object')
-    return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + canonicalJson(value[key])).join(',') + '}';
-  return JSON.stringify(value);
+  if (value === null || typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value === 'string') {
+    if (!hasWellFormedUnicode(value)) throw new Error('Canonical strings must contain valid Unicode.');
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('Canonical numbers must be finite.');
+    return JSON.stringify(value);
+  }
+  if (!value || typeof value !== 'object')
+    throw new Error('Canonical input must contain only JSON values.');
+  if (!Array.isArray(value) && Object.prototype.toString.call(value) !== '[object Object]')
+    throw new Error('Canonical objects must be plain JSON objects.');
+  if (stack.has(value)) throw new Error('Canonical input cannot contain cycles.');
+  stack.add(value);
+  let result;
+  if (Array.isArray(value)) {
+    const items = [];
+    for (let index = 0; index < value.length; index++) {
+      if (!Object.prototype.hasOwnProperty.call(value, index))
+        throw new Error('Canonical arrays cannot contain sparse holes.');
+      items.push(canonicalJson(value[index], stack));
+    }
+    result = '[' + items.join(',') + ']';
+  } else {
+    const keys = Object.keys(value).sort();
+    if (keys.some(key => !hasWellFormedUnicode(key)))
+      throw new Error('Canonical keys must contain valid Unicode.');
+    result = '{' + keys.map(key => JSON.stringify(key) + ':' + canonicalJson(value[key], stack)).join(',') + '}';
+  }
+  stack.delete(value);
+  return result;
 }
 async function genomeId(genome) {
   return (await sha256hex(canonicalJson(genome))).slice(0, 12);
@@ -576,15 +621,28 @@ function parseCartridgeFragment(fragment) {
   return parseCartridgeText(b64dec(encoded));
 }
 
-function hasWellFormedUnicode(value) {
-  for (let index = 0; index < value.length; index++) {
-    const code = value.charCodeAt(index);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(++index);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
-    } else if (code >= 0xdc00 && code <= 0xdfff) return false;
+function estimateGenomeFaces(layers, windows) {
+  const unique = new Set();
+  let total = 0;
+  for (const refs of windows) {
+    const signature = [...refs].sort((a, b) => a - b).join(',');
+    if (unique.has(signature)) continue;
+    unique.add(signature);
+    const active = new Set(refs);
+    const form = layers.find((layer, index) => active.has(index) && layer.role === 'form') || {};
+    const segments = Math.max(3, Math.min(24, Math.round(form.segments ?? 6)));
+    const limbs = Math.max(0, Math.min(14, Math.round(form.limbs ?? 0)));
+    const spikes = Math.max(0, Math.min(14, Math.round(form.spikes ?? 0)));
+    const shape = form.shape || 'blob';
+    let faces = 172 + limbs * 16 + (shape === 'ring' ? 0 : spikes * 18);
+    if (shape === 'blob') faces += 2 * (segments + 3) * segments * 2;
+    else if (shape === 'star') faces += 2 * (segments + 4) * (segments * 2 + 2);
+    else if (shape === 'ring') faces += 2 * (segments * 2 + 4) * Math.max(8, segments + 3);
+    else faces += segments * 140;
+    if (faces > 5000) throw new Error('A genome window exceeds the 5,000-face render budget.');
+    total += faces;
   }
-  return true;
+  if (total > 24000) throw new Error('Genome windows exceed the 24,000-face framing budget.');
 }
 
 function validateCartridge(cart) {
@@ -691,10 +749,17 @@ function validateCartridge(cart) {
       refs += windowLayers.length;
       if (refs > 4096 || windowLayers.some(index => !Number.isInteger(index) || index < 0 || index >= layers.length))
         throw new Error('Genome windows contain invalid layer references.');
+      const roles = new Set(windowLayers.map(index => layers[index].role));
+      if (!roles.has('form') || !roles.has('surface'))
+        throw new Error('Every genome window needs an active form and surface layer.');
     }
   } else if (compose && compose.loop != null) {
     throw new Error('Genome compose.loop requires windows.');
   }
+  const reachableWindows = windows
+    ? (compose.loop ? windows : [windows[0]])
+    : [layers.map((_, index) => index)];
+  estimateGenomeFaces(layers, reachableWindows);
   return cart;
 }
 
@@ -829,6 +894,10 @@ function renderFrame(timestamp) {
     return;
   }
   const active = animationActive();
+  if (active && !VIEW.dragging && MOTION.lastTs != null && timestamp - MOTION.lastTs < 30) {
+    requestRender();
+    return;
+  }
   const dt = MOTION.lastTs == null ? 0 : Math.min(0.1, Math.max(0, (timestamp - MOTION.lastTs) / 1000));
   MOTION.lastTs = timestamp;
   if (active) {
@@ -971,6 +1040,8 @@ function startAnim({ resetTime = true, initialRendered = false } = {}) {
   if (resetTime) MOTION.time = 0;
   MOTION.genomeMoves = genomeHasMotion(CART.genome);
   updateMotionButton();
+  if (initialRendered && animationActive() && typeof performance !== 'undefined')
+    MOTION.lastTs = performance.now();
   if (!initialRendered || animationActive()) invalidateRender();
 }
 

@@ -80,7 +80,8 @@
    <h2 id="journal-title">Field journal</h2>
    <span class="count" id="journal-count">0 saved</span>
    <input type="text" id="journal-search" aria-label="Search saved specimens" placeholder="Search specimens">
-   <button id="journal-clear" disabled>Clear journal</button>
+   <button id="journal-persist">Protect storage</button>
+   <button id="journal-clear" disabled>Clear recents</button>
   </div>
   <div id="journal-status" class="status" role="status" aria-live="polite"></div>
   <div id="journal-grid" class="journal-grid"></div>
@@ -106,11 +107,15 @@ const FALLBACK_CART = {"schema":"hologram-cartridge/1.0","id":"d45a79d29e99","ti
 const JOURNAL_DB = 'rapp-lantern';
 const JOURNAL_STORE = 'specimens';
 const JOURNAL_RECENT_LIMIT = 8;
+const JOURNAL_PINNED_LIMIT = 16;
+const JOURNAL_BYTE_LIMIT = 24 * 1024 * 1024;
 let loadSequence = 0, activeFetch = null;
 let playerPort = null, playerReady = null;
 let confirmedCart = null;
 let journalDbPromise = null;
 const pendingPlayerLoads = new Map();
+const journalChannel = window.BroadcastChannel ? new window.BroadcastChannel('rapp-lantern-journal') : null;
+if (journalChannel) journalChannel.onmessage = () => refreshJournal();
 
 function status(message, error = false) {
   const el = $('status');
@@ -135,6 +140,30 @@ function hasWellFormedUnicode(value) {
     } else if (code >= 0xdc00 && code <= 0xdfff) return false;
   }
   return true;
+}
+
+function estimateGenomeFaces(layers, windows) {
+  const unique = new Set();
+  let total = 0;
+  for (const refs of windows) {
+    const signature = [...refs].sort((a, b) => a - b).join(',');
+    if (unique.has(signature)) continue;
+    unique.add(signature);
+    const active = new Set(refs);
+    const form = layers.find((layer, index) => active.has(index) && layer.role === 'form') || {};
+    const segments = Math.max(3, Math.min(24, Math.round(form.segments ?? 6)));
+    const limbs = Math.max(0, Math.min(14, Math.round(form.limbs ?? 0)));
+    const spikes = Math.max(0, Math.min(14, Math.round(form.spikes ?? 0)));
+    const shape = form.shape || 'blob';
+    let faces = 172 + limbs * 16 + (shape === 'ring' ? 0 : spikes * 18);
+    if (shape === 'blob') faces += 2 * (segments + 3) * segments * 2;
+    else if (shape === 'star') faces += 2 * (segments + 4) * (segments * 2 + 2);
+    else if (shape === 'ring') faces += 2 * (segments * 2 + 4) * Math.max(8, segments + 3);
+    else faces += segments * 140;
+    if (faces > 5000) throw new Error('A genome window exceeds the 5,000-face render budget.');
+    total += faces;
+  }
+  if (total > 24000) throw new Error('Genome windows exceed the 24,000-face framing budget.');
 }
 
 function validateEgg(obj) {
@@ -241,10 +270,17 @@ function validateEgg(obj) {
       refs += windowLayers.length;
       if (refs > 4096 || windowLayers.some(index => !Number.isInteger(index) || index < 0 || index >= layers.length))
         throw new Error('Genome windows contain invalid layer references.');
+      const roles = new Set(windowLayers.map(index => layers[index].role));
+      if (!roles.has('form') || !roles.has('surface'))
+        throw new Error('Every genome window needs an active form and surface layer.');
     }
   } else if (compose && compose.loop != null) {
     throw new Error('Genome compose.loop requires windows.');
   }
+  const reachableWindows = windows
+    ? (compose.loop ? windows : [windows[0]])
+    : [layers.map((_, index) => index)];
+  estimateGenomeFaces(layers, reachableWindows);
   return obj;
 }
 
@@ -267,7 +303,16 @@ function openJournal() {
       if (!db.objectStoreNames.contains(JOURNAL_STORE))
         db.createObjectStore(JOURNAL_STORE, { keyPath: 'contentId' });
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      request.result.onversionchange = () => {
+        request.result.close();
+        journalDbPromise = null;
+        journalStatus('The journal was upgraded in another tab. Reloading...');
+        setTimeout(() => location.reload(), 0);
+      };
+      resolve(request.result);
+    };
+    request.onblocked = () => reject(new Error('Close other Lantern tabs to upgrade the field journal.'));
     request.onerror = () => reject(request.error || new Error('Could not open the field journal.'));
   }).catch(error => {
     journalDbPromise = null;
@@ -285,10 +330,27 @@ function journalRequest(request) {
 
 function journalTransaction(transaction) {
   return new Promise((resolve, reject) => {
+    let requestError = null;
     transaction.oncomplete = resolve;
-    transaction.onerror = () => reject(transaction.error || new Error('Journal transaction failed.'));
-    transaction.onabort = () => reject(transaction.error || new Error('Journal transaction was aborted.'));
+    transaction.onerror = event => {
+      requestError = (event.target && event.target.error) || requestError;
+    };
+    transaction.onabort = () => reject(
+      transaction.journalError || transaction.error || requestError || new Error('Journal transaction was aborted.')
+    );
   });
+}
+
+function journalChanged() {
+  if (journalChannel) journalChannel.postMessage({ type: 'changed' });
+}
+
+function cartridgeBytes(cart) {
+  return new TextEncoder().encode(JSON.stringify(cart)).byteLength;
+}
+
+function storedBytes(record) {
+  return Number.isFinite(record.bytes) ? record.bytes : cartridgeBytes(record.cart);
 }
 
 async function allSpecimens() {
@@ -296,18 +358,74 @@ async function allSpecimens() {
   return journalRequest(db.transaction(JOURNAL_STORE).objectStore(JOURNAL_STORE).getAll());
 }
 
-function enforceJournalRetention(store) {
+function enforceJournalRetention(store, transaction, protectedContentId = null, options = {}) {
   const request = store.getAll();
   request.onsuccess = () => {
-    const overflow = request.result.filter(record => !record.pinned)
-      .sort((a, b) => b.lastOpenedAt - a.lastOpenedAt)
-      .slice(JOURNAL_RECENT_LIMIT);
-    for (const record of overflow) store.delete(record.contentId);
+    const records = request.result;
+    if (records.filter(record => record.pinned).length > JOURNAL_PINNED_LIMIT && !options.allowPolicyReduction) {
+      transaction.journalError = new Error(`The journal supports at most ${JOURNAL_PINNED_LIMIT} pinned specimens.`);
+      transaction.abort();
+      return;
+    }
+    const unpinned = records.filter(record => !record.pinned)
+      .sort((a, b) => b.lastOpenedAt - a.lastOpenedAt);
+    const removals = new Set(unpinned.slice(JOURNAL_RECENT_LIMIT).map(record => record.contentId));
+    let bytes = records.filter(record => !removals.has(record.contentId))
+      .reduce((total, record) => total + storedBytes(record), 0);
+    const oldest = unpinned.slice().reverse();
+    for (const record of oldest) {
+      if (bytes <= JOURNAL_BYTE_LIMIT) break;
+      if (record.contentId === protectedContentId || removals.has(record.contentId)) continue;
+      removals.add(record.contentId);
+      bytes -= storedBytes(record);
+    }
+    if (bytes > JOURNAL_BYTE_LIMIT && !options.allowPolicyReduction) {
+      transaction.journalError = new Error('Pinned specimens fill the 24 MiB journal budget. Unpin or remove one before saving.');
+      transaction.abort();
+      return;
+    }
+    for (const contentId of removals) store.delete(contentId);
   };
 }
 
-async function saveSpecimen(cart, result, focusTarget = null) {
-  if (!result.contentId) throw new Error('Player did not return a cartridge content id.');
+async function evictOldestUnpinned(excludeContentId) {
+  const db = await openJournal();
+  const transaction = db.transaction(JOURNAL_STORE, 'readwrite');
+  const store = transaction.objectStore(JOURNAL_STORE);
+  let removed = null;
+  const request = store.getAll();
+  request.onsuccess = () => {
+    const candidate = request.result.filter(record => !record.pinned && record.contentId !== excludeContentId)
+      .sort((a, b) => a.lastOpenedAt - b.lastOpenedAt)[0];
+    if (candidate) {
+      removed = candidate;
+      store.delete(candidate.contentId);
+    }
+  };
+  await journalTransaction(transaction);
+  return removed;
+}
+
+async function restoreEvictedSpecimens(records) {
+  if (!records.length) return;
+  const db = await openJournal();
+  const transaction = db.transaction(JOURNAL_STORE, 'readwrite');
+  const store = transaction.objectStore(JOURNAL_STORE);
+  let remaining = records.length;
+  for (const record of records) {
+    const request = store.get(record.contentId);
+    request.onsuccess = () => {
+      if (!request.result) store.put(record);
+      remaining--;
+      if (remaining === 0)
+        enforceJournalRetention(store, transaction, null, { allowPolicyReduction: true });
+    };
+  }
+  await journalTransaction(transaction);
+  journalChanged();
+}
+
+async function commitSpecimen(cart, result) {
   const db = await openJournal();
   const now = Date.now();
   const transaction = db.transaction(JOURNAL_STORE, 'readwrite');
@@ -322,15 +440,44 @@ async function saveSpecimen(cart, result, focusTarget = null) {
       author: cart.author || '',
       trust: result.trust,
       cart,
+      bytes: cartridgeBytes(cart),
       pinned: Boolean(existing && existing.pinned),
       addedAt: existing ? existing.addedAt : now,
       lastOpenedAt: now,
       opens: (existing ? existing.opens : 0) + 1
     });
-    enforceJournalRetention(store);
+    enforceJournalRetention(store, transaction, result.contentId);
   };
   await journalTransaction(transaction);
+}
+
+async function saveSpecimen(cart, result, focusTarget = null) {
+  if (!result.contentId) throw new Error('Player did not return a cartridge content id.');
+  const evicted = [];
+  try {
+    while (true) {
+      try {
+        await commitSpecimen(cart, result);
+        break;
+      } catch (error) {
+        const quotaError = error.name === 'QuotaExceededError' || /quota/i.test(error.message || '');
+        if (!quotaError) throw error;
+        const removed = await evictOldestUnpinned(result.contentId);
+        if (!removed)
+          throw new Error('Browser storage is full. Pinned specimens and prior recents were preserved; unpin or remove one and retry.');
+        evicted.push(removed);
+      }
+    }
+  } catch (error) {
+    try { await restoreEvictedSpecimens(evicted); }
+    catch (restoreError) {
+      throw new Error(`Journal save failed and prior recents could not be restored: ${restoreError.message || restoreError}`);
+    }
+    throw error;
+  }
+  journalChanged();
   await refreshJournal(focusTarget);
+  journalStatus('Specimen saved.');
 }
 
 async function updateSpecimen(contentId, update, focusAction = null) {
@@ -340,11 +487,13 @@ async function updateSpecimen(contentId, update, focusAction = null) {
   const request = store.get(contentId);
   request.onsuccess = () => {
     if (request.result) {
+      const allowPolicyReduction = request.result.pinned && update.pinned === false;
       store.put({ ...request.result, ...update });
-      enforceJournalRetention(store);
+      enforceJournalRetention(store, transaction, contentId, { allowPolicyReduction });
     }
   };
   await journalTransaction(transaction);
+  journalChanged();
   await refreshJournal(focusAction ? { contentId, action: focusAction } : null);
 }
 
@@ -353,14 +502,20 @@ async function removeSpecimen(contentId) {
   const transaction = db.transaction(JOURNAL_STORE, 'readwrite');
   transaction.objectStore(JOURNAL_STORE).delete(contentId);
   await journalTransaction(transaction);
+  journalChanged();
   await refreshJournal({ contentId, action: 'remove' });
 }
 
 async function clearJournal() {
   const db = await openJournal();
   const transaction = db.transaction(JOURNAL_STORE, 'readwrite');
-  transaction.objectStore(JOURNAL_STORE).clear();
+  const store = transaction.objectStore(JOURNAL_STORE);
+  const request = store.getAll();
+  request.onsuccess = () => {
+    for (const record of request.result) if (!record.pinned) store.delete(record.contentId);
+  };
   await journalTransaction(transaction);
+  journalChanged();
   await refreshJournal();
 }
 
@@ -405,8 +560,10 @@ async function refreshJournal(focusTarget = null) {
     const visible = records.filter(record =>
       !query || `${record.title} ${record.author} ${record.contentId}`.toLowerCase().includes(query))
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastOpenedAt - a.lastOpenedAt);
-    $('journal-count').textContent = `${records.length} saved`;
-    $('journal-clear').disabled = records.length === 0;
+    const bytes = records.reduce((total, record) => total + storedBytes(record), 0);
+    const pinned = records.filter(record => record.pinned).length;
+    $('journal-count').textContent = `${records.length} saved · ${(bytes / 1048576).toFixed(1)} / 24 MiB · ${pinned} / 16 pinned`;
+    $('journal-clear').disabled = !records.some(record => !record.pinned);
     const grid = $('journal-grid');
     const focusCandidates = new Map();
     grid.replaceChildren();
@@ -596,8 +753,10 @@ async function loadEgg(obj, name, sequence = beginLoad(), options = {}) {
     const trust = result.trust === 'verified' ? 'genome ID verified' :
       (result.trust === 'unclaimed' ? 'unclaimed genome' : 'rendered as a remix');
     status(`Loaded ${cart.title || name || 'organism'} (${trust}) — drag, use the view controls, or press the arrow keys.`);
-    if (options.collect !== false)
+    if (options.collect !== false) {
+      journalStatus('Saving specimen...');
       saveSpecimen(cart, result).catch(error => journalStatus(error.message || String(error), true));
+    }
     return result;
   } catch (error) {
     if (sequence === loadSequence) {
@@ -696,8 +855,18 @@ for (const [label, file] of EGGS) {
 }
 $('journal-search').addEventListener('input', () => refreshJournal());
 $('journal-clear').onclick = () => {
-  if (!window.confirm('Clear every saved specimen from this browser?')) return;
+  if (!window.confirm('Clear every unpinned recent specimen? Pinned specimens will stay.')) return;
   clearJournal().catch(error => journalStatus(error.message || String(error), true));
+};
+$('journal-persist').onclick = async () => {
+  try {
+    if (!navigator.storage || !navigator.storage.persist)
+      throw new Error('Persistent browser storage is unavailable.');
+    const granted = await navigator.storage.persist();
+    journalStatus(granted ? 'Browser storage protection granted.' : 'The browser did not grant persistent storage.');
+  } catch (error) {
+    journalStatus(error.message || String(error), true);
+  }
 };
 refreshJournal();
 // auto-load one so the lantern is never empty on first visit

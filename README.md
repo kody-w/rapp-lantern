@@ -12,7 +12,7 @@ An `.egg` is a [`hologram-cartridge/1.0`](https://github.com/kody-w/rapp-static-
 
 ## Use it
 
-- **The loader** (`index.html`): drop an `.egg` anywhere on the page, pick a file, paste JSON, or load a URL — then **unload** and load another. Six example eggs are built in. Deliberately opened specimens enter a content-addressed local Field Journal with search, pin, reopen, remove, and clear controls; automatic startup never counts as a discovery.
+- **The loader** (`index.html`): drop an `.egg` anywhere on the page, pick a file, paste JSON, or load a URL — then **unload** and load another. Six example eggs are built in. Deliberately opened specimens enter a content-addressed local Field Journal with search, pin, reopen, remove, and pin-safe recent clearing; automatic startup never counts as a discovery. The journal preserves up to 16 pins, eight unpinned recents, and 24 MiB, with explicit storage-protection and quota feedback.
 - **Embed the player** directly, no loader needed:
   - `player.html?id=moon` for a bundled, registry-verified specimen
   - `player.html?cart=<url-to-an-egg>`
@@ -45,5 +45,9 @@ Any `hologram-cartridge/1.0` works. Capture, breed, and export them in the cabin
 - `canonical-vectors.json` — cross-runtime golden vectors for `rapp-canonical-json/1`.
 - `qr.mjs` — local QR encoder used by the share UI.
 - `eggs/*.egg` — deliberately-diverse examples plus the built-in Lumina fallback.
+
+## Conformance
+
+Run `node test.mjs` to verify both cartridge gates, all bundled eggs and registry hashes, canonical byte/hash vectors, embedded defaults, strict bounded fragments, renderer cost limits, and QR version boundaries. The same command runs in GitHub Actions.
 
 Part of the RAPP static-API stack — content-addressed, forkable, no backend. The hash is the trust; the browser is the runtime.

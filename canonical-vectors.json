@@ -53,6 +53,55 @@
       },
       "canonical": "{\"a\":{\"alpha\":1,\"β\":2},\"z\":[3,true,null,\"x\"]}",
       "sha256": "08c5d3ea20b85230896f24ed27006585e2c58ff4e1bfb4124adeb8fa2130b731"
+    },
+    {
+      "name": "utf16-vs-codepoint",
+      "value": {
+        "": "private",
+        "𐀀": "astral"
+      },
+      "canonical": "{\"𐀀\":\"astral\",\"\":\"private\"}",
+      "sha256": "7a7378c0a9cc8b9c7fc85ceab2c30513d230922304f9b373e27fc79b5dd250e2"
+    },
+    {
+      "name": "rounding-subnormal-negative-zero",
+      "value": {
+        "minimum": 5e-324,
+        "negativeZero": -0,
+        "rounded": 333333333.33333329
+      },
+      "canonical": "{\"minimum\":5e-324,\"negativeZero\":0,\"rounded\":333333333.3333333}",
+      "sha256": "50eb79315a17f2072227f684a9129bdd7efca60cff8fa1f55eb7526b6b0a8c39"
+    },
+    {
+      "name": "escaping",
+      "value": {
+        "text": "\u0000\b\t\n\f\r\"\\/"
+      },
+      "canonical": "{\"text\":\"\\u0000\\b\\t\\n\\f\\r\\\"\\\\/\"}",
+      "sha256": "997f29258dcf1c2af2af1cd2e02858e4c93dc4637189d62278a67426a6728fd2"
+    }
+  ],
+  "rejections": [
+    {
+      "name": "unpaired-high-surrogate",
+      "javascript": "\"\\ud800\""
+    },
+    {
+      "name": "unpaired-low-surrogate",
+      "javascript": "\"\\udc00\""
+    },
+    {
+      "name": "non-finite-number",
+      "javascript": "NaN"
+    },
+    {
+      "name": "non-json-value",
+      "javascript": "undefined"
+    },
+    {
+      "name": "sparse-array",
+      "javascript": "Array(1)"
     }
   ]
 }
