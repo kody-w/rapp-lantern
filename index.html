@@ -19,6 +19,11 @@
  .meta{display:flex;align-items:baseline;gap:10px;min-height:24px;margin:2px 0 14px;flex-wrap:wrap}
  .meta #title{font-weight:700;font-size:16px} .meta #born{color:var(--muted);font-size:13px} .meta #hint{color:var(--muted);font-size:12px;margin-left:auto}
  .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 12px}
+ .share-dock{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin:-3px 0 14px;padding:10px;border:1px solid var(--line);border-radius:11px;background:var(--panel)}
+ .share-dock[hidden]{display:none}.share-dock .share-status{flex-basis:100%;margin:0}
+ .share-output{flex-basis:100%;display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap}
+ .share-output[hidden]{display:none}.share-output input{flex:1;min-width:220px}
+ #loader-qr{background:#fff;border-radius:8px;image-rendering:pixelated}
  button,.btn{font:inherit;font-size:13px;cursor:pointer;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:9px;padding:8px 13px}
  button:hover{border-color:var(--accent)} button:disabled{opacity:.4;cursor:default;border-color:var(--line)}
  button:focus-visible,.btn:focus-visible,input:focus-visible,textarea:focus-visible,#drop:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
@@ -71,6 +76,17 @@
   <input type="text" id="url" placeholder="…or paste an .egg URL (raw.githubusercontent.com/…)">
   <button id="loadurl">Load URL</button>
  </div>
+ <div class="share-dock" id="share-dock" hidden aria-label="Share confirmed specimen">
+  <button id="share-native" disabled>Share</button>
+  <button id="share-copy" disabled>Copy link</button>
+  <button id="share-qr" disabled aria-controls="loader-share-output" aria-expanded="false">QR</button>
+  <button id="share-download">Download .egg</button>
+  <div id="loader-share-status" class="status share-status" role="status" aria-live="polite"></div>
+  <div id="loader-share-output" class="share-output" hidden>
+   <canvas id="loader-qr" width="1" height="1" aria-label="QR code for the confirmed specimen"></canvas>
+   <input id="loader-share-url" aria-label="Share link" readonly>
+  </div>
+ </div>
 
  <div class="label">example eggs — different sources, different species</div>
  <div class="eggs" id="eggs"></div>
@@ -111,9 +127,11 @@ const JOURNAL_PINNED_LIMIT = 16;
 const JOURNAL_BYTE_LIMIT = 24 * 1024 * 1024;
 let loadSequence = 0, activeFetch = null;
 let playerPort = null, playerReady = null;
-let confirmedCart = null;
+let confirmedCart = null, confirmedResult = null, preparedShare = null, loaderQrVisible = false;
+let sharePreparationToken = 0;
 let journalDbPromise = null;
 const pendingPlayerLoads = new Map();
+const pendingShareRequests = new Map();
 const journalChannel = window.BroadcastChannel ? new window.BroadcastChannel('rapp-lantern-journal') : null;
 if (journalChannel) journalChannel.onmessage = () => refreshJournal();
 
@@ -122,6 +140,29 @@ function status(message, error = false) {
   el.textContent = message || '';
   el.className = 'status' + (error ? ' err' : '');
   el.setAttribute('role', error ? 'alert' : 'status');
+}
+
+function loaderShareStatus(message, error = false) {
+  const element = $('loader-share-status');
+  element.textContent = message || '';
+  element.className = 'status share-status' + (error ? ' err' : '');
+}
+
+function clearLoaderShare() {
+  sharePreparationToken++;
+  preparedShare = null;
+  loaderQrVisible = false;
+  $('share-dock').hidden = true;
+  $('share-native').disabled = true;
+  $('share-copy').disabled = true;
+  $('share-qr').disabled = true;
+  $('share-qr').setAttribute('aria-expanded', 'false');
+  $('loader-share-output').hidden = true;
+  $('loader-share-url').value = '';
+  loaderShareStatus('');
+  for (const pending of pendingShareRequests.values())
+    pending.reject(new Error('Share preparation was cancelled.'));
+  pendingShareRequests.clear();
 }
 
 function parseEggText(text) {
@@ -480,7 +521,7 @@ async function saveSpecimen(cart, result, focusTarget = null) {
   journalStatus('Specimen saved.');
 }
 
-async function updateSpecimen(contentId, update, focusAction = null) {
+async function updateSpecimen(contentId, update, focusAction = null, initiator = null) {
   const db = await openJournal();
   const transaction = db.transaction(JOURNAL_STORE, 'readwrite');
   const store = transaction.objectStore(JOURNAL_STORE);
@@ -494,16 +535,16 @@ async function updateSpecimen(contentId, update, focusAction = null) {
   };
   await journalTransaction(transaction);
   journalChanged();
-  await refreshJournal(focusAction ? { contentId, action: focusAction } : null);
+  await refreshJournal(focusAction ? { contentId, action: focusAction, initiator } : null);
 }
 
-async function removeSpecimen(contentId) {
+async function removeSpecimen(contentId, initiator = null) {
   const db = await openJournal();
   const transaction = db.transaction(JOURNAL_STORE, 'readwrite');
   transaction.objectStore(JOURNAL_STORE).delete(contentId);
   await journalTransaction(transaction);
   journalChanged();
-  await refreshJournal({ contentId, action: 'remove' });
+  await refreshJournal({ contentId, action: 'remove', initiator });
 }
 
 async function clearJournal() {
@@ -530,24 +571,32 @@ function specimenCard(record, focusCandidates) {
   actions.className = 'card-actions';
   const open = document.createElement('button');
   open.textContent = 'Open';
+  open.setAttribute('aria-label', `Open ${record.title}`);
   open.onclick = async () => {
     try {
       const result = await loadEgg(record.cart, record.title, undefined, { collect: false });
-      if (result) await saveSpecimen(record.cart, result, { contentId: record.contentId, action: 'open' });
+      if (result) await saveSpecimen(record.cart, result, { contentId: record.contentId, action: 'open', initiator: open });
     } catch (error) {
       journalStatus(error.message || String(error), true);
     }
   };
   const pin = document.createElement('button');
   pin.textContent = record.pinned ? 'Unpin' : 'Pin';
-  pin.onclick = () => updateSpecimen(record.contentId, { pinned: !record.pinned }, 'pin')
+  pin.setAttribute('aria-label', `${record.pinned ? 'Unpin' : 'Pin'} ${record.title}`);
+  pin.onclick = () => updateSpecimen(record.contentId, { pinned: !record.pinned }, 'pin', pin)
     .catch(error => journalStatus(error.message, true));
   const remove = document.createElement('button');
   remove.textContent = 'Remove';
-  remove.onclick = () => removeSpecimen(record.contentId)
+  remove.setAttribute('aria-label', `Remove ${record.title}`);
+  remove.onclick = () => removeSpecimen(record.contentId, remove)
     .catch(error => journalStatus(error.message, true));
   focusCandidates.set(`${record.contentId}:open`, open);
   focusCandidates.set(`${record.contentId}:pin`, pin);
+  focusCandidates.set(`${record.contentId}:remove`, remove);
+  for (const [action, button] of [['open', open], ['pin', pin], ['remove', remove]]) {
+    button.dataset.contentId = record.contentId;
+    button.dataset.journalAction = action;
+  }
   actions.append(open, pin, remove);
   card.append(title, details, actions);
   return card;
@@ -565,6 +614,18 @@ async function refreshJournal(focusTarget = null) {
     $('journal-count').textContent = `${records.length} saved · ${(bytes / 1048576).toFixed(1)} / 24 MiB · ${pinned} / 16 pinned`;
     $('journal-clear').disabled = !records.some(record => !record.pinned);
     const grid = $('journal-grid');
+    let shouldRestoreFocus = Boolean(focusTarget) && (
+      !focusTarget.initiator ||
+      document.activeElement === focusTarget.initiator ||
+      document.activeElement === document.body
+    );
+    if (grid.contains(document.activeElement)) {
+      const active = document.activeElement;
+      if (active.dataset.contentId && active.dataset.journalAction) {
+        focusTarget = { contentId: active.dataset.contentId, action: active.dataset.journalAction };
+        shouldRestoreFocus = true;
+      }
+    }
     const focusCandidates = new Map();
     grid.replaceChildren();
     if (!visible.length) {
@@ -576,9 +637,9 @@ async function refreshJournal(focusTarget = null) {
       for (const record of visible) grid.appendChild(specimenCard(record, focusCandidates));
     }
     journalStatus('');
-    if (focusTarget) {
+    if (focusTarget && shouldRestoreFocus) {
       const target = focusCandidates.get(`${focusTarget.contentId}:${focusTarget.action}`);
-      (target || $('journal-search')).focus();
+      (target || focusCandidates.values().next().value || $('journal-search')).focus();
     }
   } catch (error) {
     journalStatus(error.message || String(error), true);
@@ -608,6 +669,13 @@ function beginLoad({ restore = true } = {}) {
   if (activeFetch) activeFetch.abort();
   activeFetch = null;
   cancelPendingPlayerLoads('Load was replaced by a newer request.', restore);
+  if (confirmedCart && confirmedResult && !preparedShare) {
+    const cart = confirmedCart, result = confirmedResult, sequence = loadSequence;
+    setTimeout(() => {
+      if (confirmedCart === cart && confirmedResult === result && !preparedShare)
+        activateShareDock(cart, result, sequence);
+    }, 0);
+  }
   return loadSequence;
 }
 
@@ -675,8 +743,17 @@ function handlePlayerMessage(event, readyResolve, readyReject) {
     readyResolve();
     return;
   }
+  if (message.version != null && message.version !== PROTOCOL_VERSION) return;
   if (message.type === 'protocol-error') {
     readyReject(new Error(message.message || 'The player rejected this protocol version.'));
+    return;
+  }
+  if (message.requestId && (message.type === 'share-ready' || message.type === 'share-error')) {
+    const pending = pendingShareRequests.get(message.requestId);
+    if (!pending) return;
+    pendingShareRequests.delete(message.requestId);
+    if (message.type === 'share-ready') pending.resolve(message);
+    else pending.reject(new Error(message.message || 'Could not prepare sharing.'));
     return;
   }
   if (!message.loadId) return;
@@ -686,6 +763,99 @@ function handlePlayerMessage(event, readyResolve, readyReject) {
   else if (message.type === 'error') pending.reject(new Error(message.message || 'The player could not render this egg.'));
   else return;
   pendingPlayerLoads.delete(message.loadId);
+}
+
+async function prepareConfirmedShare(result, requestId) {
+  if (!playerPort || !result.contentId) throw new Error('Confirmed content identity is unavailable.');
+  const response = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingShareRequests.delete(requestId);
+      reject(new Error('Share preparation timed out.'));
+    }, LOAD_TIMEOUT_MS * 2);
+    pendingShareRequests.set(requestId, {
+      resolve: value => { clearTimeout(timer); resolve(value); },
+      reject: error => { clearTimeout(timer); reject(error); }
+    });
+  });
+  playerPort.postMessage({
+    type: 'prepare-share',
+    version: PROTOCOL_VERSION,
+    requestId,
+    contentId: result.contentId
+  });
+  return response;
+}
+
+function activateShareDock(cart, result, sequence) {
+  const token = ++sharePreparationToken;
+  confirmedResult = result;
+  preparedShare = null;
+  loaderQrVisible = false;
+  $('share-dock').hidden = false;
+  $('share-native').disabled = true;
+  $('share-copy').disabled = true;
+  $('share-qr').disabled = true;
+  $('share-qr').setAttribute('aria-expanded', 'false');
+  $('loader-share-output').hidden = true;
+  $('loader-share-url').value = '';
+  loaderShareStatus('Preparing a content-bound share link...');
+  prepareConfirmedShare(result, `share-${sequence}-${token}`).then(prepared => {
+    if (token !== sharePreparationToken || confirmedCart !== cart || prepared.contentId !== result.contentId) return;
+    preparedShare = prepared;
+    $('share-native').disabled = false;
+    $('share-copy').disabled = false;
+    $('share-qr').disabled = !prepared.qrEligible;
+    loaderShareStatus(prepared.qrEligible ? 'Ready to share.' : 'Link ready; QR is too large, so use Share, Copy, or Download.');
+  }).catch(error => {
+    if (token === sharePreparationToken && confirmedCart === cart)
+      loaderShareStatus(error.message || String(error), true);
+  });
+}
+
+function confirmedEggArtifact() {
+  if (!confirmedCart || !confirmedResult) throw new Error('No confirmed specimen is available.');
+  const bytes = JSON.stringify(confirmedCart);
+  const title = (confirmedCart.title || 'cartridge').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'cartridge';
+  const suffix = confirmedResult.contentId ? '-' + confirmedResult.contentId.slice(0, 8) : '';
+  const filename = `${title}${suffix}.egg`;
+  const blob = new Blob([bytes], { type: 'application/json' });
+  const file = typeof File === 'function' ? new File([blob], filename, { type: blob.type }) : null;
+  return { bytes, blob, file, filename };
+}
+
+function shareIsCurrent(share) {
+  return Boolean(share && preparedShare === share && confirmedResult && confirmedResult.contentId === share.contentId);
+}
+
+async function copyPreparedShare(share = preparedShare) {
+  if (!shareIsCurrent(share)) throw new Error('Share link is not ready.');
+  try {
+    if (!navigator.clipboard || !navigator.clipboard.writeText)
+      throw new Error('Clipboard access is unavailable.');
+    await navigator.clipboard.writeText(share.url);
+    if (!shareIsCurrent(share)) return;
+    loaderShareStatus('Share link copied.');
+  } catch (error) {
+    if (!shareIsCurrent(share)) return;
+    $('loader-share-url').value = share.url;
+    $('loader-share-output').hidden = false;
+    $('loader-share-url').focus();
+    $('loader-share-url').select();
+    loaderShareStatus('Clipboard access failed. The link is selected for manual copy.', true);
+  }
+}
+
+function downloadConfirmedEgg() {
+  try {
+    const artifact = confirmedEggArtifact();
+    const url = URL.createObjectURL(artifact.blob);
+    const anchor = Object.assign(document.createElement('a'), { href: url, download: artifact.filename });
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    loaderShareStatus(`Downloaded ${artifact.filename}.`);
+  } catch (error) {
+    loaderShareStatus(error.message || String(error), true);
+  }
 }
 
 function ensurePlayer() {
@@ -747,6 +917,7 @@ async function loadEgg(obj, name, sequence = beginLoad(), options = {}) {
     iframe.style.display = 'block';
     drop.style.display = 'none';
     confirmedCart = cart;
+    activateShareDock(cart, result, sequence);
     $('title').textContent = cart.title || name || 'organism';
     $('born').textContent = (cart.born && cart.born.from) ? '· ' + cart.born.from : '';
     $('unload').disabled = false;
@@ -775,7 +946,8 @@ function unload() {
   iframe.src = 'about:blank'; iframe.style.display = 'none'; drop.style.display = 'flex';
   playerPort && playerPort.close();
   playerPort = null; playerReady = null;
-  confirmedCart = null;
+  confirmedCart = null; confirmedResult = null;
+  clearLoaderShare();
   stage.setAttribute('aria-busy', 'false');
   $('title').textContent = ''; $('born').textContent = ''; $('unload').disabled = true; status('');
 }
@@ -823,6 +995,65 @@ $('loadurl').onclick = async () => {
   }
 };
 $('url').addEventListener('keydown', e => { if (e.key === 'Enter') $('loadurl').click(); });
+$('share-copy').onclick = () => copyPreparedShare()
+  .catch(error => loaderShareStatus(error.message || String(error), true));
+$('share-native').onclick = async () => {
+  const share = preparedShare;
+  const cart = confirmedCart;
+  if (!shareIsCurrent(share)) return;
+  if (!navigator.share) {
+    await copyPreparedShare(share);
+    return;
+  }
+  try {
+    await navigator.share({
+      title: cart && cart.title ? cart.title : 'Holographic organism',
+      text: 'Open this holographic organism in rapp-lantern.',
+      url: share.url
+    });
+    if (!shareIsCurrent(share)) return;
+    loaderShareStatus('Shared.');
+  } catch (error) {
+    if (error.name === 'AbortError') return;
+    if (!shareIsCurrent(share)) return;
+    await copyPreparedShare(share);
+  }
+};
+$('share-download').onclick = downloadConfirmedEgg;
+$('share-qr').onclick = async () => {
+  const share = preparedShare;
+  if (!shareIsCurrent(share) || !share.qrEligible) return;
+  if (loaderQrVisible) {
+    loaderQrVisible = false;
+    $('loader-share-output').hidden = true;
+    $('share-qr').setAttribute('aria-expanded', 'false');
+    loaderShareStatus('QR code hidden.');
+    return;
+  }
+  try {
+    const { qr } = await import('./qr.mjs');
+    if (!shareIsCurrent(share)) return;
+    const { size, modules } = qr(share.url, { ecl: 'M' });
+    const quiet = 4, scale = Math.max(2, Math.floor(240 / (size + quiet * 2)));
+    const dimension = (size + quiet * 2) * scale;
+    const canvas = $('loader-qr');
+    canvas.width = dimension; canvas.height = dimension;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#fff'; context.fillRect(0, 0, dimension, dimension);
+    context.fillStyle = '#000';
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++)
+      if (modules[y][x]) context.fillRect((x + quiet) * scale, (y + quiet) * scale, scale, scale);
+    if (!shareIsCurrent(share)) return;
+    $('loader-share-url').value = share.url;
+    $('loader-share-output').hidden = false;
+    loaderQrVisible = true;
+    $('share-qr').setAttribute('aria-expanded', 'true');
+    loaderShareStatus('QR code ready to scan.');
+  } catch (error) {
+    if (!shareIsCurrent(share)) return;
+    loaderShareStatus(error.message || String(error), true);
+  }
+};
 
 // drag & drop anywhere
 addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('drag'); });

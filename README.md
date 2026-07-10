@@ -12,13 +12,13 @@ An `.egg` is a [`hologram-cartridge/1.0`](https://github.com/kody-w/rapp-static-
 
 ## Use it
 
-- **The loader** (`index.html`): drop an `.egg` anywhere on the page, pick a file, paste JSON, or load a URL — then **unload** and load another. Six example eggs are built in. Deliberately opened specimens enter a content-addressed local Field Journal with search, pin, reopen, remove, and pin-safe recent clearing; automatic startup never counts as a discovery. The journal preserves up to 16 pins, eight unpinned recents, and 24 MiB, with explicit storage-protection and quota feedback.
+- **The loader** (`index.html`): drop an `.egg` anywhere on the page, pick a file, paste JSON, or load a URL — then **unload** and load another. Six example eggs are built in. Every confirmed specimen gets a prepared Share/Copy/QR/Download dock. Deliberately opened specimens enter a content-addressed local Field Journal with search, pin, reopen, remove, and pin-safe recent clearing; automatic startup never counts as a discovery. The journal preserves up to 16 pins, eight unpinned recents, and 24 MiB, with explicit storage-protection and quota feedback.
 - **Embed the player** directly, no loader needed:
   - `player.html?id=moon` for a bundled, registry-verified specimen
   - `player.html?cart=<url-to-an-egg>`
   - `player.html#<base64url(JSON.stringify(egg))>`
   - `player.html?embed=1#<base64url(JSON.stringify(egg))>` for a canvas-only responsive embed
-  - or `postMessage({type:'load-cartridge', version:1, loadId:'mine', cart:<egg>}, playerOrigin)` into an `<iframe src="player.html">`. The player accepts only its parent window and replies with a scoped `rendered` or `error` event.
+  - or `postMessage({type:'load-cartridge', version:1, loadId:'mine', cart:<egg>}, playerOrigin)` into an `<iframe src="player.html">`. The player accepts only its parent window and replies with a scoped `rendered` or `error` event. Protocol v1 also exposes `prepare-share` for the currently confirmed `contentId`.
 
 Every load path validates the cartridge before replacing the current organism. Remote loads are limited to HTTP(S), 2 MiB, and 15 seconds; malformed or stale loads leave the current scene intact.
 

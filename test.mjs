@@ -87,6 +87,26 @@ const { journalTransaction } = loadSection(
   '\n\nfunction journalChanged',
   ['journalTransaction']
 );
+const { boundedCanvasSize } = loadSection(
+  player,
+  'function boundedCanvasSize',
+  '\n\nfunction resizeCanvas',
+  ['boundedCanvasSize']
+);
+const { handleProtocolMessage } = loadSection(
+  player,
+  'function handleProtocolMessage',
+  '\n\nwindow.addEventListener',
+  ['handleProtocolMessage'],
+  {
+    PROTOCOL_VERSION: 1,
+    MOTION: { disposed: false },
+    beginLoad() {},
+    cancelScheduledFrame() {},
+    handleIncomingCartridge() {},
+    handlePrepareShare() {}
+  }
+);
 
 let checks = 0;
 const check = (name, fn) => {
@@ -224,6 +244,43 @@ check('QR version transitions and payload limit', () => {
   assert.equal((qr('x'.repeat(181)).size - 17) / 4, 10);
   assert.equal((qr('x'.repeat(997)).size - 17) / 4, 25);
   assert.throws(() => qr('x'.repeat(998)), /too long/);
+});
+
+check('canvas backing store always honors its pixel budget', () => {
+  for (const [width, height, dpr] of [
+    [480, 480, 2],
+    [4000, 3000, 1],
+    [100, 10000, 2],
+    [7680, 4320, 2],
+    [1, 10000, 3],
+    [200000, 200000, 2],
+    [1, 2000000, 2]
+  ]) {
+    const size = boundedCanvasSize(width, height, dpr);
+    assert.ok(size.width * size.height <= 1600000, `${width}x${height}@${dpr}`);
+    assert.ok(size.width <= 8192 && size.height <= 8192, `${width}x${height}@${dpr} dimension`);
+    if (size.width > 1 && size.height > 1) {
+      const aspectError = Math.abs((size.width / size.height) / (width / height) - 1);
+      assert.ok(aspectError < 0.02, `${width}x${height}@${dpr} aspect`);
+    }
+  }
+});
+
+check('protocol returns terminal errors for malformed payloads', () => {
+  for (const payload of [null, false, 0, '']) {
+    const responses = [];
+    handleProtocolMessage(payload, response => responses.push(response));
+    assert.equal(responses.length, 1);
+    assert.equal(responses[0].type, 'protocol-error');
+  }
+  const responses = [];
+  handleProtocolMessage(
+    { type: 'load-cartridge', version: 1, loadId: 'bad', cart: null },
+    response => responses.push(response)
+  );
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].type, 'error');
+  assert.equal(responses[0].loadId, 'bad');
 });
 
 check('journal retention is pin-safe, byte-bounded, and count-bounded', () => {

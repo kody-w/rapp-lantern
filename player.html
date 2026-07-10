@@ -13,7 +13,7 @@
  #meta{color:#8b949e;font-size:12px}
  #stage{position:relative;width:100%;max-width:480px}
  canvas{display:block;width:100%;border-radius:14px;background:#010409;border:1px solid #30363d}
- #canvas{cursor:grab;touch-action:pan-y}
+ #canvas{cursor:grab;touch-action:pan-y pinch-zoom}
  #canvas.dragging{cursor:grabbing}
  #canvas:focus-visible{outline:3px solid #58a6ff;outline-offset:3px}
  #orbit-hint{position:absolute;top:10px;left:50%;transform:translateX(-50%);font-size:11px;font-weight:700;letter-spacing:.02em;color:#e6edf3;background:rgba(1,4,9,0.72);border:1px solid rgba(110,118,129,.45);padding:6px 10px;border-radius:999px;pointer-events:none;white-space:nowrap}
@@ -64,7 +64,6 @@
  html.embed #stage{width:100%;height:100%;max-width:none}
  html.embed #canvas{width:100%;height:100%;border:0;border-radius:0}
  @media(max-width:420px){
-  #view-controls{transform:scale(.88);transform-origin:left bottom}
   #orbit-hint{top:7px}
  }
 </style></head><body>
@@ -98,7 +97,7 @@
   <div id="controls">
   <button id="btn-dl" disabled>↓ download .egg</button>
   <button id="btn-link" disabled>copy link</button>
-  <button id="btn-qr" disabled>QR</button>
+  <button id="btn-qr" disabled aria-controls="qr-wrap" aria-expanded="false">QR</button>
     <a class="button-link" href="index.html">gallery →</a>
   </div>
   <div id="load-row">
@@ -795,7 +794,7 @@ const DEFAULT_CART = {"schema":"hologram-cartridge/1.0","id":"d45a79d29e99","tit
 /* ── State ────────────────────────────────────────────────────────────────── */
 let CART = null, RAF = null, _pmPort = null;
 let LOAD_SEQUENCE = 0, activeFetch = null, activeRegistryController = null;
-let CURRENT_GENOME_ID = null;
+let CURRENT_GENOME_ID = null, CURRENT_CONTENT_ID = null;
 const RENDER_STATES = new Map();
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -825,6 +824,7 @@ function setPlayerStatus(message, error = false) {
 
 function clearShareArtifacts() {
   document.getElementById('qr-wrap').style.display = 'none';
+  document.getElementById('btn-qr').setAttribute('aria-expanded', 'false');
   document.getElementById('qr-link').textContent = '';
   document.getElementById('share-fallback').hidden = true;
   document.getElementById('share-url').value = '';
@@ -838,6 +838,8 @@ function setOutputActionsEnabled(enabled) {
 function showSourceError(message) {
   cancelScheduledFrame();
   CART = null;
+  CURRENT_GENOME_ID = null;
+  CURRENT_CONTENT_ID = null;
   clearShareArtifacts();
   setOutputActionsEnabled(false);
   verEl.style.display = 'none';
@@ -953,14 +955,28 @@ function describeCartridge(cart, got, match) {
   return `${title}${author}. ${traits}. ${trust}. Interactive 3D view: use arrow keys to orbit, plus and minus to zoom, and Home to reset.`;
 }
 
+function boundedCanvasSize(cssWidth, cssHeight, deviceScale, maxPixels = 1600000, maxDimension = 8192) {
+  const width = Math.max(1, cssWidth);
+  const height = Math.max(1, cssHeight);
+  const scale = Math.min(
+    deviceScale || 1,
+    2,
+    Math.sqrt(maxPixels / (width * height)),
+    maxDimension / width,
+    maxDimension / height
+  );
+  let outputWidth = Math.max(1, Math.floor(width * scale));
+  let outputHeight = Math.max(1, Math.floor(height * scale));
+  if (outputWidth * outputHeight > maxPixels) {
+    if (outputWidth >= outputHeight) outputWidth = Math.max(1, Math.floor(maxPixels / outputHeight));
+    else outputHeight = Math.max(1, Math.floor(maxPixels / outputWidth));
+  }
+  return { width: outputWidth, height: outputHeight };
+}
+
 function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
-  const cssWidth = Math.max(1, rect.width);
-  const cssHeight = Math.max(1, rect.height);
-  const maxPixels = 1600000;
-  const scale = Math.max(0.5, Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(maxPixels / (cssWidth * cssHeight))));
-  const width = Math.max(1, Math.round(cssWidth * scale));
-  const height = Math.max(1, Math.round(cssHeight * scale));
+  const { width, height } = boundedCanvasSize(rect.width, rect.height, window.devicePixelRatio || 1);
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width;
     canvas.height = height;
@@ -1007,6 +1023,7 @@ async function loadCart(input, sequence = beginLoad(), options = {}) {
   }
   CART = cart;
   CURRENT_GENOME_ID = got;
+  CURRENT_CONTENT_ID = contentId;
   clearShareArtifacts();
   setOutputActionsEnabled(true);
   verEl.style.display = 'block';
@@ -1173,28 +1190,30 @@ function getRegistry() {
 async function makeShareUrl() {
   if (!CART) throw new Error('Load an egg before sharing.');
   const cart = CART;
+  const expectedContentId = CURRENT_CONTENT_ID;
   const contentId = await cartridgeContentId(cart);
-  if (CART !== cart) throw new Error('The organism changed while preparing its link.');
+  if (!expectedContentId || contentId !== expectedContentId || CURRENT_CONTENT_ID !== expectedContentId)
+    throw new Error('The organism changed while preparing its link.');
   let registry = null;
   try {
     registry = await getRegistry();
   } catch (error) {
-    if (CART !== cart) throw new Error('The organism changed while preparing its link.');
+    if (CURRENT_CONTENT_ID !== expectedContentId) throw new Error('The organism changed while preparing its link.');
     setPlayerStatus(`Registry lookup unavailable; using a self-contained link. ${error.message}`);
   }
-  if (CART !== cart) throw new Error('The organism changed while preparing its link.');
+  if (CURRENT_CONTENT_ID !== expectedContentId) throw new Error('The organism changed while preparing its link.');
   const entry = registry && registry.entries.find(item => item.content_sha256 === contentId);
   if (entry) {
     const url = new URL('player.html', location.href);
     url.searchParams.set('id', entry.name);
     url.searchParams.set('h', contentId);
-    if (CART !== cart) throw new Error('The organism changed while preparing its link.');
+    if (CURRENT_CONTENT_ID !== expectedContentId) throw new Error('The organism changed while preparing its link.');
     return url.href;
   }
   const url = new URL('player.html#' + b64enc(JSON.stringify(cart)), location.href).href;
   if (new TextEncoder().encode(url).byteLength > MAX_INLINE_URL_BYTES)
     throw new Error('This egg is too large for a reliable link. Download and send the .egg instead.');
-  if (CART !== cart) throw new Error('The organism changed while preparing its link.');
+  if (CURRENT_CONTENT_ID !== expectedContentId) throw new Error('The organism changed while preparing its link.');
   return url;
 }
 
@@ -1310,7 +1329,7 @@ document.getElementById('btn-apply').onclick = async () => {
 
 document.getElementById('btn-dl').onclick = () => {
   if (!CART) return;
-  const blob = new Blob([JSON.stringify(CART, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify(CART)], { type: 'application/json' });
   const fileName = (CART.title || 'cartridge').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'cartridge';
   const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: fileName + '.egg' });
   a.click(); URL.revokeObjectURL(a.href);
@@ -1429,7 +1448,7 @@ canvas.addEventListener('pointercancel', event => {
   if (event.pointerId === VIEW.activePointer) orbitUp();
 });
 canvas.addEventListener('wheel', event => {
-  if (document.activeElement !== canvas && !event.ctrlKey) return;
+  if (event.ctrlKey || document.activeElement !== canvas) return;
   event.preventDefault();
   orbitZoom(event.deltaY);
 }, { passive: false });
@@ -1451,7 +1470,6 @@ canvas.addEventListener('keydown', event => {
 document.querySelectorAll('[data-view]').forEach(button => {
   button.addEventListener('click', () => {
     applyViewAction(button.dataset.view);
-    canvas.focus({ preventScroll: true });
   });
 });
 if (matchMedia('(pointer: coarse)').matches) orbitHintEl.textContent = 'swipe sideways or use controls';
@@ -1476,7 +1494,12 @@ document.getElementById('btn-qr').onclick = async () => {
   if (!CART) return;
   const cart = CART;
   const wrap = document.getElementById('qr-wrap');
-  if (wrap.style.display === 'block') { wrap.style.display = 'none'; return; }
+  if (wrap.style.display === 'block') {
+    wrap.style.display = 'none';
+    document.getElementById('btn-qr').setAttribute('aria-expanded', 'false');
+    setPlayerStatus('QR code hidden.');
+    return;
+  }
   if (!qrMod) {
     try { qrMod = await import('./qr.mjs'); }
     catch (error) {
@@ -1507,6 +1530,7 @@ document.getElementById('btn-qr').onclick = async () => {
     if (modules[y][x]) qx.fillRect((x+q)*scale, (y+q)*scale, scale, scale);
   document.getElementById('qr-link').textContent = url;
   wrap.style.display = 'block';
+  document.getElementById('btn-qr').setAttribute('aria-expanded', 'true');
   setPlayerStatus('QR code ready to scan.');
 };
 
@@ -1532,7 +1556,38 @@ async function handleIncomingCartridge(message, send) {
   }
 }
 
+async function handlePrepareShare(message, send) {
+  try {
+    if (typeof message.requestId !== 'string' || !message.requestId || message.requestId.length > 128)
+      throw new Error('prepare-share requires a nonempty requestId of at most 128 characters.');
+    if (!CART || typeof message.contentId !== 'string' || message.contentId !== CURRENT_CONTENT_ID)
+      throw new Error('The requested specimen is not the currently confirmed cartridge.');
+    const url = await makeShareUrl();
+    if (CURRENT_CONTENT_ID !== message.contentId)
+      throw new Error('The specimen changed while preparing sharing.');
+    send({
+      type: 'share-ready',
+      version: PROTOCOL_VERSION,
+      requestId: message.requestId,
+      contentId: CURRENT_CONTENT_ID,
+      url,
+      qrEligible: new TextEncoder().encode(url).byteLength <= 997
+    });
+  } catch (error) {
+    send({
+      type: 'share-error',
+      version: PROTOCOL_VERSION,
+      requestId: typeof message.requestId === 'string' ? message.requestId : '',
+      message: error.message || String(error)
+    });
+  }
+}
+
 function handleProtocolMessage(message, send, dispose) {
+  if (!message || typeof message !== 'object') {
+    send({ type: 'protocol-error', version: PROTOCOL_VERSION, message: 'Protocol messages must be objects.' });
+    return;
+  }
   const version = message.version == null ? PROTOCOL_VERSION : message.version;
   if (version !== PROTOCOL_VERSION) {
     send({ type: 'protocol-error', version: PROTOCOL_VERSION, message: `Unsupported protocol version: ${version}.` });
@@ -1551,15 +1606,37 @@ function handleProtocolMessage(message, send, dispose) {
     dispose && dispose();
     return;
   }
-  if (message.type === 'load-cartridge' && message.cart) {
+  if (message.type === 'load-cartridge') {
+    const loadId = typeof message.loadId === 'string' ? message.loadId : '';
+    if (!loadId || loadId.length > 128 || !message.cart || typeof message.cart !== 'object') {
+      send({
+        type: 'error',
+        version: PROTOCOL_VERSION,
+        loadId,
+        message: 'load-cartridge requires a nonempty loadId and cartridge object.'
+      });
+      return;
+    }
     MOTION.disposed = false;
     handleIncomingCartridge(message, send);
+    return;
   }
+  if (message.type === 'prepare-share') {
+    handlePrepareShare(message, send);
+    return;
+  }
+  send({
+    type: 'protocol-error',
+    version: PROTOCOL_VERSION,
+    requestId: typeof message.requestId === 'string' ? message.requestId : '',
+    loadId: typeof message.loadId === 'string' ? message.loadId : '',
+    message: `Unknown protocol command: ${String(message.type || '')}.`
+  });
 }
 
 window.addEventListener('message', e => {
-  if (e.source !== window.parent || !e.data) return;
-  if (e.data.type === 'hologram-init') {
+  if (e.source !== window.parent) return;
+  if (e.data && typeof e.data === 'object' && e.data.type === 'hologram-init') {
     const port = e.ports[0] || null;
     if (!port) return;
     const version = e.data.version == null ? PROTOCOL_VERSION : e.data.version;
@@ -1581,14 +1658,12 @@ window.addEventListener('message', e => {
       port.onmessage = null;
       port.close();
     };
-    port.onmessage = event => {
-      if (event.data) handleProtocolMessage(event.data, send, dispose);
-    };
+    port.onmessage = event => handleProtocolMessage(event.data, send, dispose);
     port.start && port.start();
     port.postMessage({
       type: 'ready',
       version: PROTOCOL_VERSION,
-      capabilities: ['load-cartridge', 'cancel-loads', 'dispose', 'transactional-render']
+      capabilities: ['load-cartridge', 'cancel-loads', 'dispose', 'transactional-render', 'prepare-share']
     });
     invalidateRender();
     return;
