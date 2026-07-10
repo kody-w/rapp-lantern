@@ -939,10 +939,9 @@ function beginLoad() {
   return LOAD_SEQUENCE;
 }
 
-function describeCartridge(cart, got, match) {
-  const roles = {};
-  for (const layer of cart.genome.layers) roles[layer.role] = layer;
-  const form = roles.form || {}, surface = roles.surface || {}, motion = roles.motion || {};
+function describeCartridge(cart, got, match, time = 0) {
+  const active = readGenome(cart.genome, time);
+  const form = active.form, surface = active.surface, motion = active.motion;
   const title = cart.title || 'Untitled organism';
   const author = cart.author ? ` by ${cart.author}` : '';
   const traits = [
@@ -995,7 +994,6 @@ async function loadCart(input, sequence = beginLoad(), options = {}) {
   const trust = !declared ? 'unclaimed' : (got === declared ? 'verified' : 'mismatch');
   const match = trust !== 'mismatch';
   const serialized = JSON.stringify(cart, null, 2);
-  const description = describeCartridge(cart, got, match);
   const pageTitle = `${cart.title || 'hologram'} — rapp-lantern`;
   rememberRenderState();
   const restoredState = options.restore ? RENDER_STATES.get(got) : null;
@@ -1003,6 +1001,7 @@ async function loadCart(input, sequence = beginLoad(), options = {}) {
   if (restoredState) Object.assign(nextView, restoredState.view, { dragging: false, activePointer: null });
   else Object.assign(nextView, { autoOrbit: 0, userMoved: false, dragging: false, activePointer: null });
   const nextTime = restoredState ? restoredState.time : 0;
+  const description = describeCartridge(cart, got, match, nextTime);
   cancelScheduledFrame();
   try {
     const probe = document.createElement('canvas');
@@ -1635,6 +1634,7 @@ function handleProtocolMessage(message, send, dispose) {
 }
 
 window.addEventListener('message', e => {
+  if (window.parent === window) return;
   if (e.source !== window.parent) return;
   if (e.data && typeof e.data === 'object' && e.data.type === 'hologram-init') {
     const port = e.ports[0] || null;

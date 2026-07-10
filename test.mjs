@@ -73,7 +73,7 @@ const { validateRegistry } = loadSection(
 const { enforceJournalRetention } = loadSection(
   index,
   'function cartridgeBytes',
-  '\n\nasync function evictOldestUnpinned',
+  '\n\nasync function commitSpecimen',
   ['enforceJournalRetention'],
   {
     JOURNAL_RECENT_LIMIT: 8,
@@ -267,6 +267,7 @@ check('canvas backing store always honors its pixel budget', () => {
 });
 
 check('protocol returns terminal errors for malformed payloads', () => {
+  assert.match(player, /if \(window\.parent === window\) return;/);
   for (const payload of [null, false, 0, '']) {
     const responses = [];
     handleProtocolMessage(payload, response => responses.push(response));
