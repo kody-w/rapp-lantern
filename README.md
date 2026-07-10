@@ -24,7 +24,7 @@ Every load path validates the cartridge before replacing the current organism. R
 
 Shared player URLs accept exactly one source: a fragment, `cart`, or `id` plus its optional content hash. Ambiguous or unverifiable links fail closed instead of substituting another organism.
 
-Copy-link and QR actions use registry URLs bound to the complete cartridge hash when a specimen matches `registry.json`; imported eggs use self-contained hash links. The local QR encoder supports payloads through 997 bytes, while larger eggs remain downloadable instead of generating unreliable codes.
+Copy-link and QR actions use registry URLs bound to the complete cartridge hash when a specimen matches `registry.json`; imported eggs use self-contained hash links. The local QR encoder supports payloads through 997 bytes. Native Share falls back to the exact `.egg` file for larger cartridges, with download as the universal fallback.
 
 Standalone shared specimens expose an explicit **Keep in Field Journal** handoff. The handoff carries the exact cartridge in a bounded canonical fragment, revalidates it in the loader, and records it as pinned only after a confirmed render and durable Journal commit.
 

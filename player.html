@@ -97,6 +97,7 @@
   <div id="controls">
   <button id="btn-dl" disabled>↓ download .egg</button>
   <button id="btn-link" disabled>copy link</button>
+  <button id="btn-share" disabled>share</button>
   <button id="btn-qr" disabled aria-controls="qr-wrap" aria-expanded="false">QR</button>
     <a class="button-link" id="keep-link" aria-disabled="true" tabindex="-1">Keep in Field Journal · loading…</a>
     <a class="button-link" href="index.html">gallery →</a>
@@ -755,9 +756,6 @@ function validateCartridge(cart) {
       refs += windowLayers.length;
       if (refs > 4096 || windowLayers.some(index => !Number.isInteger(index) || index < 0 || index >= layers.length))
         throw new Error('Genome windows contain invalid layer references.');
-      const roles = new Set(windowLayers.map(index => layers[index].role));
-      if (!roles.has('form') || !roles.has('surface'))
-        throw new Error('Every genome window needs an active form and surface layer.');
     }
   } else if (compose && compose.loop != null) {
     throw new Error('Genome compose.loop requires windows.');
@@ -802,6 +800,7 @@ const DEFAULT_CART = {"schema":"hologram-cartridge/1.0","id":"d45a79d29e99","tit
 let CART = null, RAF = null, _pmPort = null, _directHost = null;
 let LOAD_SEQUENCE = 0, activeFetch = null, activeRegistryController = null;
 let CURRENT_GENOME_ID = null, CURRENT_CONTENT_ID = null;
+let PREPARED_SHARE_URL = null;
 const RENDER_STATES = new Map();
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -830,6 +829,7 @@ function setPlayerStatus(message, error = false) {
 }
 
 function clearShareArtifacts() {
+  PREPARED_SHARE_URL = null;
   document.getElementById('qr-wrap').style.display = 'none';
   document.getElementById('btn-qr').setAttribute('aria-expanded', 'false');
   document.getElementById('qr-link').textContent = '';
@@ -838,7 +838,7 @@ function clearShareArtifacts() {
 }
 
 function setOutputActionsEnabled(enabled) {
-  for (const id of ['btn-dl', 'btn-link', 'btn-qr'])
+  for (const id of ['btn-dl', 'btn-link', 'btn-share', 'btn-qr'])
     document.getElementById(id).disabled = !enabled;
 }
 
@@ -1062,6 +1062,8 @@ async function loadCart(input, sequence = beginLoad(), options = {}) {
   MOTION.time = nextTime;
   setPlayerStatus(`Loaded ${cart.title || 'organism'}.`);
   startAnim({ resetTime: false, initialRendered: true });
+  if (!document.documentElement.classList.contains('embed'))
+    prepareStandaloneShare(contentId);
   return { id: got, contentId, declared, match, trust };
 }
 
@@ -1228,6 +1230,30 @@ async function makeShareUrl() {
     throw new Error('This egg is too large for a reliable link. Download and send the .egg instead.');
   if (CURRENT_CONTENT_ID !== expectedContentId) throw new Error('The organism changed while preparing its link.');
   return url;
+}
+
+async function prepareStandaloneShare(contentId) {
+  PREPARED_SHARE_URL = null;
+  document.getElementById('btn-link').disabled = true;
+  document.getElementById('btn-share').disabled = true;
+  document.getElementById('btn-qr').disabled = true;
+  try {
+    const url = await makeShareUrl();
+    if (CURRENT_CONTENT_ID !== contentId) return;
+    PREPARED_SHARE_URL = url;
+    document.getElementById('btn-link').disabled = false;
+    document.getElementById('btn-share').disabled = false;
+    document.getElementById('btn-link').title = '';
+    document.getElementById('btn-qr').title = '';
+    document.getElementById('btn-qr').disabled =
+      new TextEncoder().encode(url).byteLength > 997;
+  } catch (error) {
+    if (CURRENT_CONTENT_ID !== contentId) return;
+    const message = error.message || String(error);
+    document.getElementById('btn-share').disabled = false;
+    document.getElementById('btn-link').title = message;
+    document.getElementById('btn-qr').title = message;
+  }
 }
 
 function updateJournalHandoff(cart) {
@@ -1412,6 +1438,53 @@ document.getElementById('btn-link').onclick = async () => {
     input.select();
     setPlayerStatus('Clipboard access failed. The share link is selected for manual copy.', true);
   }
+};
+
+document.getElementById('btn-share').onclick = async () => {
+  if (!CART) return;
+  const cart = CART, contentId = CURRENT_CONTENT_ID, url = PREPARED_SHARE_URL;
+  const blob = new Blob([JSON.stringify(cart)], { type: 'application/json' });
+  const file = typeof File === 'function'
+    ? new File([blob], safeEggFilename(cart.title, contentId), { type: blob.type })
+    : null;
+  const isCurrent = () => CART === cart && CURRENT_CONTENT_ID === contentId;
+  if (!navigator.share) {
+    if (url) document.getElementById('btn-link').click();
+    else document.getElementById('btn-dl').click();
+    return;
+  }
+  const canShareFile = file && navigator.canShare && navigator.canShare({ files: [file] });
+  const payload = canShareFile
+    ? {
+        title: cart.title || 'Holographic organism',
+        text: 'Keep this holographic organism as an .egg file.',
+        files: [file]
+      }
+    : (url
+        ? {
+            title: cart.title || 'Holographic organism',
+            text: 'Open this holographic organism in rapp-lantern.',
+            url
+          }
+        : null);
+  if (payload) {
+    try {
+      await navigator.share(payload);
+      if (isCurrent()) setPlayerStatus(canShareFile ? 'Shared .egg file.' : 'Shared link.');
+      return;
+    } catch (error) {
+      if (error.name === 'AbortError') return;
+      if (!isCurrent()) return;
+      setPlayerStatus(
+        canShareFile ? 'File sharing was unavailable; use download.' : 'Link sharing was unavailable; use copy link.',
+        true
+      );
+      return;
+    }
+  }
+  if (!isCurrent()) return;
+  if (url) document.getElementById('btn-link').click();
+  else document.getElementById('btn-dl').click();
 };
 
 document.getElementById('btn-file').onclick = () => {

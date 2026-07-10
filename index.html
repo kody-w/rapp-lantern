@@ -342,9 +342,6 @@ function validateEgg(obj) {
       refs += windowLayers.length;
       if (refs > 4096 || windowLayers.some(index => !Number.isInteger(index) || index < 0 || index >= layers.length))
         throw new Error('Genome windows contain invalid layer references.');
-      const roles = new Set(windowLayers.map(index => layers[index].role));
-      if (!roles.has('form') || !roles.has('surface'))
-        throw new Error('Every genome window needs an active form and surface layer.');
     }
   } else if (compose && compose.loop != null) {
     throw new Error('Genome compose.loop requires windows.');
@@ -586,7 +583,8 @@ function specimenCard(record, focusCandidates) {
   const title = document.createElement('h3');
   title.textContent = (record.pinned ? '★ ' : '') + record.title;
   const details = document.createElement('p');
-  details.textContent = `${record.author || 'unknown author'} · ${record.trust || 'unclaimed'} · opened ${record.opens || 1}×`;
+  const shortHash = record.contentId.slice(0, 12);
+  details.textContent = `${record.author || 'unknown author'} · #${shortHash} · ${record.trust || 'unclaimed'} · opened ${record.opens || 1}×`;
   const actions = document.createElement('div');
   actions.className = 'card-actions';
   const open = document.createElement('button');
@@ -607,9 +605,12 @@ function specimenCard(record, focusCandidates) {
     .catch(error => journalStatus(error.message, true));
   const remove = document.createElement('button');
   remove.textContent = 'Remove';
-  remove.setAttribute('aria-label', `Remove ${record.title}`);
-  remove.onclick = () => removeSpecimen(record.contentId, remove)
-    .catch(error => journalStatus(error.message, true));
+  remove.setAttribute('aria-label', `Remove ${record.title}, hash ${shortHash}`);
+  remove.onclick = () => {
+    if (!window.confirm(`Remove ${record.title} (#${shortHash}) from the Field Journal?`)) return;
+    removeSpecimen(record.contentId, remove)
+      .catch(error => journalStatus(error.message, true));
+  };
   focusCandidates.set(`${record.contentId}:open`, open);
   focusCandidates.set(`${record.contentId}:pin`, pin);
   focusCandidates.set(`${record.contentId}:remove`, remove);
@@ -850,8 +851,10 @@ function activateShareDock(cart, result, sequence) {
     $('share-qr').disabled = !prepared.qrEligible;
     loaderShareStatus(prepared.qrEligible ? 'Ready to share.' : 'Link ready; QR is too large, so use Share, Copy, or Download.');
   }).catch(error => {
-    if (token === sharePreparationToken && confirmedCart === cart)
-      loaderShareStatus(error.message || String(error), true);
+    if (token === sharePreparationToken && confirmedCart === cart) {
+      $('share-native').disabled = false;
+      loaderShareStatus(`Link unavailable; Share will use the .egg file. ${error.message || error}`, true);
+    }
   });
 }
 
@@ -861,7 +864,7 @@ function confirmedEggArtifact() {
   const filename = safeEggFilename(confirmedCart.title, confirmedResult.contentId);
   const blob = new Blob([bytes], { type: 'application/json' });
   const file = typeof File === 'function' ? new File([blob], filename, { type: blob.type }) : null;
-  return { bytes, blob, file, filename };
+  return { bytes, blob, file, filename, contentId: confirmedResult.contentId };
 }
 
 function shareIsCurrent(share) {
@@ -1088,24 +1091,48 @@ $('share-copy').onclick = () => copyPreparedShare()
 $('share-native').onclick = async () => {
   const share = preparedShare;
   const cart = confirmedCart;
-  if (!shareIsCurrent(share)) return;
+  let artifact;
+  try { artifact = confirmedEggArtifact(); }
+  catch (error) { loaderShareStatus(error.message || String(error), true); return; }
+  const artifactIsCurrent = () =>
+    confirmedCart === cart && confirmedResult && confirmedResult.contentId === artifact.contentId;
   if (!navigator.share) {
-    await copyPreparedShare(share);
+    if (shareIsCurrent(share)) await copyPreparedShare(share);
+    else downloadConfirmedEgg();
     return;
   }
-  try {
-    await navigator.share({
-      title: cart && cart.title ? cart.title : 'Holographic organism',
-      text: 'Open this holographic organism in rapp-lantern.',
-      url: share.url
-    });
-    if (!shareIsCurrent(share)) return;
-    loaderShareStatus('Shared.');
-  } catch (error) {
-    if (error.name === 'AbortError') return;
-    if (!shareIsCurrent(share)) return;
-    await copyPreparedShare(share);
+  const canShareFile = artifact.file && navigator.canShare && navigator.canShare({ files: [artifact.file] });
+  const payload = canShareFile
+    ? {
+        title: cart && cart.title ? cart.title : 'Holographic organism',
+        text: 'Keep this holographic organism as an .egg file.',
+        files: [artifact.file]
+      }
+    : (shareIsCurrent(share)
+        ? {
+            title: cart && cart.title ? cart.title : 'Holographic organism',
+            text: 'Open this holographic organism in rapp-lantern.',
+            url: share.url
+          }
+        : null);
+  if (payload) {
+    try {
+      await navigator.share(payload);
+      if (artifactIsCurrent()) loaderShareStatus(canShareFile ? 'Shared .egg file.' : 'Shared link.');
+      return;
+    } catch (error) {
+      if (error.name === 'AbortError') return;
+      if (!artifactIsCurrent()) return;
+      loaderShareStatus(
+        canShareFile ? 'File sharing was unavailable; use Download.' : 'Link sharing was unavailable; use Copy link.',
+        true
+      );
+      return;
+    }
   }
+  if (!artifactIsCurrent()) return;
+  if (shareIsCurrent(share)) await copyPreparedShare(share);
+  else downloadConfirmedEgg();
 };
 $('share-download').onclick = downloadConfirmedEgg;
 $('share-qr').onclick = async () => {

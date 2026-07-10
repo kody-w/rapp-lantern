@@ -236,6 +236,22 @@ check('render-cost budget ignores dormant non-looping windows', () => {
   assert.doesNotThrow(() => indexGate(structuredClone(cart)));
 });
 
+check('canonical sparse windows remain accepted', () => {
+  const cart = {
+    schema: 'hologram-cartridge/1.0',
+    genome: {
+      layers: [
+        { role: 'form', shape: 'blob', segments: 8 },
+        { role: 'motion', pulse: 0.5 },
+        { role: 'surface', palette: ['#ffffff'] }
+      ],
+      compose: { windows: [[0, 2]], loop: false }
+    }
+  };
+  assert.doesNotThrow(() => playerGate(structuredClone(cart)));
+  assert.doesNotThrow(() => indexGate(structuredClone(cart)));
+});
+
 const registry = JSON.parse(read('registry.json'));
 check('registry structure, aliases, ids, and content hashes', () => {
   validateRegistry(structuredClone(registry));
