@@ -216,7 +216,10 @@ function estimateGenomeFaces(layers, windows) {
     if (unique.has(signature)) continue;
     unique.add(signature);
     const active = new Set(refs);
-    const form = layers.find((layer, index) => active.has(index) && layer.role === 'form') || {};
+    let form = layers.find(layer => layer.role === 'form') || {};
+    layers.forEach((layer, index) => {
+      if (active.has(index) && layer.role === 'form') form = layer;
+    });
     const segments = Math.max(3, Math.min(24, Math.round(form.segments ?? 6)));
     const limbs = Math.max(0, Math.min(14, Math.round(form.limbs ?? 0)));
     const spikes = Math.max(0, Math.min(14, Math.round(form.spikes ?? 0)));
@@ -867,6 +870,12 @@ function confirmedEggArtifact() {
   return { bytes, blob, file, filename, contentId: confirmedResult.contentId };
 }
 
+function canNativeShareFile(file) {
+  if (!file || !navigator.canShare) return false;
+  try { return navigator.canShare({ files: [file] }); }
+  catch { return false; }
+}
+
 function shareIsCurrent(share) {
   return Boolean(share && preparedShare === share && confirmedResult && confirmedResult.contentId === share.contentId);
 }
@@ -1101,18 +1110,19 @@ $('share-native').onclick = async () => {
     else downloadConfirmedEgg();
     return;
   }
-  const canShareFile = artifact.file && navigator.canShare && navigator.canShare({ files: [artifact.file] });
-  const payload = canShareFile
+  const hasShareUrl = shareIsCurrent(share);
+  const canShareFile = !hasShareUrl && canNativeShareFile(artifact.file);
+  const payload = hasShareUrl
     ? {
-        title: cart && cart.title ? cart.title : 'Holographic organism',
-        text: 'Keep this holographic organism as an .egg file.',
-        files: [artifact.file]
-      }
-    : (shareIsCurrent(share)
-        ? {
             title: cart && cart.title ? cart.title : 'Holographic organism',
             text: 'Open this holographic organism in rapp-lantern.',
             url: share.url
+          }
+    : (canShareFile
+        ? {
+            title: cart && cart.title ? cart.title : 'Holographic organism',
+            text: 'Keep this holographic organism as an .egg file.',
+            files: [artifact.file]
           }
         : null);
   if (payload) {

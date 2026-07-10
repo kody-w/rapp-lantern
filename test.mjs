@@ -114,11 +114,23 @@ const { handleProtocolMessage } = loadSection(
     handlePrepareShare() {}
   }
 );
-const { safeEggFilename } = loadSection(
+const { readGenome } = loadSection(
+  player,
+  'function readGenome',
+  '\nfunction buildCreatureFaces',
+  ['readGenome'],
+  {
+    TAU: Math.PI * 2,
+    clamp: (value, low, high) => Math.max(low, Math.min(high, value)),
+    DEFAULT_PALETTE: ['#4488ff', '#2255cc']
+  }
+);
+const { safeEggFilename, canNativeShareFile } = loadSection(
   player,
   'function safeEggFilename',
   "\n\ndocument.getElementById('btn-dl')",
-  ['safeEggFilename']
+  ['safeEggFilename', 'canNativeShareFile'],
+  { navigator: { canShare() { throw new TypeError('unsupported'); } } }
 );
 
 let checks = 0;
@@ -250,6 +262,17 @@ check('canonical sparse windows remain accepted', () => {
   };
   assert.doesNotThrow(() => playerGate(structuredClone(cart)));
   assert.doesNotThrow(() => indexGate(structuredClone(cart)));
+  const inherited = readGenome({
+    layers: [
+      { role: 'form', shape: 'blob', segments: 8 },
+      { role: 'surface', palette: ['#000000'], pattern: 'solid' },
+      { role: 'motion', pulse: 0.5 },
+      { role: 'surface', palette: ['#ffffff'], pattern: 'glow' }
+    ],
+    compose: { windows: [[0, 1, 2], [2, 3]], loop: true }
+  }, 2);
+  assert.equal(inherited.form.shape, 'blob');
+  assert.equal(inherited.surface.pattern, 'glow');
 });
 
 const registry = JSON.parse(read('registry.json'));
@@ -327,6 +350,7 @@ check('download filenames remain browser-safe and byte-bounded', () => {
   assert.ok(new TextEncoder().encode(filename).byteLength <= 140);
   assert.doesNotMatch(filename, /[<>:"/\\|?*\u0000-\u001f]/);
   assert.match(filename, /-abcdef01\.egg$/);
+  assert.equal(canNativeShareFile({}), false);
 });
 
 check('protocol returns terminal errors for malformed payloads', () => {

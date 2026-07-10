@@ -50,6 +50,6 @@ Any `hologram-cartridge/1.0` works. Capture, breed, and export them in the cabin
 
 ## Conformance
 
-Run `node test.mjs` to verify both cartridge gates, all bundled eggs and registry hashes, canonical byte/hash vectors, embedded defaults, strict bounded fragments, renderer cost limits, and QR version boundaries. The same command runs in GitHub Actions.
+Run `node test.mjs` to verify both cartridge gates, all bundled eggs and registry hashes, canonical byte/hash vectors, embedded defaults, strict bounded fragments, renderer cost limits, and QR version boundaries. GitHub Actions also runs `browser-test.mjs` against headless Chromium and WebKit for served-page loading, sharing, fail-closed links, and console errors.
 
 Part of the RAPP static-API stack — content-addressed, forkable, no backend. The hash is the trust; the browser is the runtime.

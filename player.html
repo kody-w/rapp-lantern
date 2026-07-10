@@ -310,9 +310,11 @@ function readGenome(genome, time, forcedWindow = null) {
     : forcedWindow;
   const active = windows.length ? new Set(windows[winIdx] || []) : null;
   const byRole = {};
-  layers.forEach((layer, index) => {
-    if (active && !active.has(index)) return;
+  layers.forEach(layer => {
     if (!byRole[layer.role]) byRole[layer.role] = layer;
+  });
+  if (active) layers.forEach((layer, index) => {
+    if (active.has(index)) byRole[layer.role] = layer;
   });
   const form = byRole.form || {};
   const surface = byRole.surface || {};
@@ -630,7 +632,10 @@ function estimateGenomeFaces(layers, windows) {
     if (unique.has(signature)) continue;
     unique.add(signature);
     const active = new Set(refs);
-    const form = layers.find((layer, index) => active.has(index) && layer.role === 'form') || {};
+    let form = layers.find(layer => layer.role === 'form') || {};
+    layers.forEach((layer, index) => {
+      if (active.has(index) && layer.role === 'form') form = layer;
+    });
     const segments = Math.max(3, Math.min(24, Math.round(form.segments ?? 6)));
     const limbs = Math.max(0, Math.min(14, Math.round(form.limbs ?? 0)));
     const spikes = Math.max(0, Math.min(14, Math.round(form.spikes ?? 0)));
@@ -870,13 +875,15 @@ function showSourceError(message) {
 function genomeHasMotion(genome) {
   const compose = genome.compose || {};
   const windows = Array.isArray(compose.windows) ? compose.windows : [];
-  const activeIndexes = windows.length
-    ? new Set(compose.loop && windows.length > 1 ? windows.flat() : windows[0])
-    : null;
-  const motionLayers = genome.layers.filter((layer, index) =>
-    layer.role === 'motion' && (!activeIndexes || activeIndexes.has(index)));
-  const moves = motionLayers.some(layer =>
-    ['breathe', 'drift', 'pulse', 'reach'].some(key => Math.abs(layer[key] || 0) > 0.0001));
+  const windowCount = compose.loop && windows.length > 1 ? windows.length : 1;
+  let moves = false;
+  for (let index = 0; index < windowCount; index++) {
+    const motion = readGenome(genome, 0, index).motion;
+    if (['breathe', 'drift', 'pulse', 'reach'].some(key => Math.abs(motion[key] || 0) > 0.0001)) {
+      moves = true;
+      break;
+    }
+  }
   return moves || Boolean(compose.loop && windows.length > 1);
 }
 
@@ -1399,12 +1406,18 @@ function safeEggFilename(title, contentId = '') {
   return `${base || 'cartridge'}${suffix}.egg`;
 }
 
+function canNativeShareFile(file) {
+  if (!file || !navigator.canShare) return false;
+  try { return navigator.canShare({ files: [file] }); }
+  catch { return false; }
+}
+
 document.getElementById('btn-dl').onclick = () => {
   if (!CART) return;
   const blob = new Blob([JSON.stringify(CART)], { type: 'application/json' });
   const fileName = safeEggFilename(CART.title, CURRENT_CONTENT_ID);
   const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: fileName });
-  a.click(); URL.revokeObjectURL(a.href);
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 0);
 };
 
 document.getElementById('btn-link').onclick = async () => {
@@ -1453,18 +1466,18 @@ document.getElementById('btn-share').onclick = async () => {
     else document.getElementById('btn-dl').click();
     return;
   }
-  const canShareFile = file && navigator.canShare && navigator.canShare({ files: [file] });
-  const payload = canShareFile
+  const canShareFile = !url && canNativeShareFile(file);
+  const payload = url
     ? {
-        title: cart.title || 'Holographic organism',
-        text: 'Keep this holographic organism as an .egg file.',
-        files: [file]
-      }
-    : (url
-        ? {
             title: cart.title || 'Holographic organism',
             text: 'Open this holographic organism in rapp-lantern.',
             url
+          }
+    : (canShareFile
+        ? {
+            title: cart.title || 'Holographic organism',
+            text: 'Keep this holographic organism as an .egg file.',
+            files: [file]
           }
         : null);
   if (payload) {
