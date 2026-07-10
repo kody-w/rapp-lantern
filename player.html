@@ -530,26 +530,62 @@ async function sha256hex(str) {
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2,'0')).join('');
 }
 function canonicalJson(value) {
+  // rapp-canonical-json/1: UTF-16 key order with ECMAScript JSON primitive serialization.
   if (Array.isArray(value)) return '[' + value.map(canonicalJson).join(',') + ']';
   if (value !== null && typeof value === 'object')
     return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + canonicalJson(value[key])).join(',') + '}';
   return JSON.stringify(value);
 }
 async function genomeId(genome) {
-  // Matches build.py: json.dumps(genome, sort_keys=True, separators=(',',':'))
   return (await sha256hex(canonicalJson(genome))).slice(0, 12);
 }
 async function cartridgeContentId(cart) { return sha256hex(canonicalJson(cart)); }
 
 /* ── Base64url helpers ────────────────────────────────────────────────────── */
 function b64enc(s) { return btoa(unescape(encodeURIComponent(s))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
-function b64dec(s) { s = String(s).replace(/-/g,'+').replace(/_/g,'/'); while(s.length%4)s+='='; return decodeURIComponent(escape(atob(s))); }
+function b64dec(s) {
+  const encoded = String(s);
+  let padded = encoded.replace(/-/g,'+').replace(/_/g,'/');
+  while (padded.length % 4) padded += '=';
+  const binary = atob(padded);
+  const canonical = btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  if (canonical !== encoded) throw new Error('Shared egg fragment is not canonical base64url.');
+  return decodeURIComponent(escape(binary));
+}
 
 /* ── Bounded cartridge gate ──────────────────────────────────────────────── */
 const MAX_CART_BYTES = 2 * 1024 * 1024;
+const MAX_REGISTRY_BYTES = 256 * 1024;
 const LOAD_TIMEOUT_MS = 15000;
 const MAX_INLINE_URL_BYTES = 12000;
 const PROTOCOL_VERSION = 1;
+
+function parseCartridgeText(text) {
+  const clean = String(text).replace(/^\uFEFF/, '');
+  if (new TextEncoder().encode(clean).byteLength > MAX_CART_BYTES)
+    throw new Error('Cartridge exceeds the 2 MiB limit.');
+  return JSON.parse(clean);
+}
+
+function parseCartridgeFragment(fragment) {
+  const encoded = String(fragment);
+  if (!encoded || !/^[A-Za-z0-9_-]+$/.test(encoded) || encoded.length % 4 === 1)
+    throw new Error('Shared egg fragment is not valid base64url.');
+  if (Math.floor(encoded.length * 3 / 4) > MAX_CART_BYTES)
+    throw new Error('Shared egg fragment exceeds the 2 MiB limit.');
+  return parseCartridgeText(b64dec(encoded));
+}
+
+function hasWellFormedUnicode(value) {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(++index);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+    } else if (code >= 0xdc00 && code <= 0xdfff) return false;
+  }
+  return true;
+}
 
 function validateCartridge(cart) {
   if (!cart || typeof cart !== 'object' || Array.isArray(cart))
@@ -559,7 +595,11 @@ function validateCartridge(cart) {
   const inspect = (value, depth) => {
     if (depth > 32) throw new Error('Cartridge nesting is too deep.');
     const type = typeof value;
-    if (value === null || type === 'string' || type === 'boolean') return;
+    if (type === 'string') {
+      if (!hasWellFormedUnicode(value)) throw new Error('Cartridge strings must contain valid Unicode.');
+      return;
+    }
+    if (value === null || type === 'boolean') return;
     if (type === 'number' && !Number.isFinite(value))
       throw new Error('Cartridge numbers must be finite.');
     if (type === 'number') return;
@@ -569,7 +609,14 @@ function validateCartridge(cart) {
     if (stack.has(value)) throw new Error('Cartridge data cannot contain cycles.');
     if (++nodes > 100000) throw new Error('Cartridge is too complex.');
     stack.add(value);
-    for (const child of Array.isArray(value) ? value : Object.values(value)) inspect(child, depth + 1);
+    if (Array.isArray(value)) {
+      for (const child of value) inspect(child, depth + 1);
+    } else {
+      for (const [key, child] of Object.entries(value)) {
+        if (!hasWellFormedUnicode(key)) throw new Error('Cartridge keys must contain valid Unicode.');
+        inspect(child, depth + 1);
+      }
+    }
     stack.delete(value);
   };
   inspect(cart, 0);
@@ -587,7 +634,14 @@ function validateCartridge(cart) {
   if (cart.parents != null && (!Array.isArray(cart.parents) || cart.parents.length > 128 ||
       cart.parents.some(parent => typeof parent !== 'string')))
     throw new Error('Cartridge parents must be an array of strings.');
-  const layers = cart.genome && cart.genome.layers;
+  if (!cart.genome || Object.prototype.toString.call(cart.genome) !== '[object Object]')
+    throw new Error('Cartridge genome must be an object.');
+  const compose = cart.genome.compose;
+  if (compose != null && Object.prototype.toString.call(compose) !== '[object Object]')
+    throw new Error('Genome compose must be an object.');
+  if (compose && compose.loop != null && typeof compose.loop !== 'boolean')
+    throw new Error('Genome compose.loop must be boolean.');
+  const layers = cart.genome.layers;
   if (!Array.isArray(layers) || !layers.length || layers.length > 128)
     throw new Error('Genome layers must contain between 1 and 128 entries.');
   const numericKeys = new Set(['k', 'limbs', 'segments', 'body_r', 'limb_len', 'spikes', 'glow', 'opacity', 'breathe', 'drift', 'pulse', 'reach']);
@@ -624,29 +678,34 @@ function validateCartridge(cart) {
       for (const key of ['breathe', 'drift', 'pulse', 'reach']) inRange(key, 0, 1);
     }
   }
-  const windows = cart.genome.compose && cart.genome.compose.windows;
+  if (!layers.some(layer => layer.role === 'form') || !layers.some(layer => layer.role === 'surface'))
+    throw new Error('Genome needs at least one form and one surface layer.');
+  const windows = compose && compose.windows;
   if (windows != null) {
-    if (!Array.isArray(windows) || windows.length > 32)
-      throw new Error('Genome windows must be an array with at most 32 entries.');
+    if (!Array.isArray(windows) || !windows.length || windows.length > 32)
+      throw new Error('Genome windows must contain between 1 and 32 entries.');
     let refs = 0;
     for (const windowLayers of windows) {
-      if (!Array.isArray(windowLayers)) throw new Error('Each genome window must be an array.');
+      if (!Array.isArray(windowLayers) || !windowLayers.length)
+        throw new Error('Each genome window must reference at least one layer.');
       refs += windowLayers.length;
       if (refs > 4096 || windowLayers.some(index => !Number.isInteger(index) || index < 0 || index >= layers.length))
         throw new Error('Genome windows contain invalid layer references.');
     }
+  } else if (compose && compose.loop != null) {
+    throw new Error('Genome compose.loop requires windows.');
   }
   return cart;
 }
 
-async function readBounded(response) {
+async function readBounded(response, maxBytes = MAX_CART_BYTES, label = 'Cartridge') {
   const declared = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > MAX_CART_BYTES)
-    throw new Error('Cartridge exceeds the 2 MiB limit.');
+  if (Number.isFinite(declared) && declared > maxBytes)
+    throw new Error(`${label} exceeds its size limit.`);
   if (!response.body || !response.body.getReader) {
     const text = await response.text();
-    if (new TextEncoder().encode(text).byteLength > MAX_CART_BYTES)
-      throw new Error('Cartridge exceeds the 2 MiB limit.');
+    if (new TextEncoder().encode(text).byteLength > maxBytes)
+      throw new Error(`${label} exceeds its size limit.`);
     return text;
   }
   const reader = response.body.getReader();
@@ -656,9 +715,9 @@ async function readBounded(response) {
     const { done, value } = await reader.read();
     if (done) break;
     bytes += value.byteLength;
-    if (bytes > MAX_CART_BYTES) {
+    if (bytes > maxBytes) {
       await reader.cancel();
-      throw new Error('Cartridge exceeds the 2 MiB limit.');
+      throw new Error(`${label} exceeds its size limit.`);
     }
     text += decoder.decode(value, { stream: true });
   }
@@ -670,7 +729,7 @@ const DEFAULT_CART = {"schema":"hologram-cartridge/1.0","id":"d45a79d29e99","tit
 
 /* ── State ────────────────────────────────────────────────────────────────── */
 let CART = null, RAF = null, _pmPort = null;
-let LOAD_SEQUENCE = 0, activeFetch = null;
+let LOAD_SEQUENCE = 0, activeFetch = null, activeRegistryController = null;
 let CURRENT_GENOME_ID = null;
 const RENDER_STATES = new Map();
 const canvas = document.getElementById('canvas');
@@ -803,7 +862,9 @@ function rememberRenderState() {
 function beginLoad() {
   LOAD_SEQUENCE += 1;
   if (activeFetch) activeFetch.abort();
+  if (activeRegistryController) activeRegistryController.abort();
   activeFetch = null;
+  activeRegistryController = null;
   return LOAD_SEQUENCE;
 }
 
@@ -843,7 +904,7 @@ requestAnimationFrame(resizeCanvas);
 
 async function loadCart(input, sequence = beginLoad(), options = {}) {
   const cart = validateCartridge(input);
-  const got = await genomeId(cart.genome);
+  const [got, contentId] = await Promise.all([genomeId(cart.genome), cartridgeContentId(cart)]);
   if (sequence !== LOAD_SEQUENCE) return null;
   const declared = cart.id || '';
   const trust = !declared ? 'unclaimed' : (got === declared ? 'verified' : 'mismatch');
@@ -853,6 +914,28 @@ async function loadCart(input, sequence = beginLoad(), options = {}) {
   const pageTitle = `${cart.title || 'hologram'} — rapp-lantern`;
   rememberRenderState();
   const restoredState = options.restore ? RENDER_STATES.get(got) : null;
+  const nextView = { ...VIEW };
+  if (restoredState) Object.assign(nextView, restoredState.view, { dragging: false, activePointer: null });
+  else Object.assign(nextView, { autoOrbit: 0, userMoved: false, dragging: false, activePointer: null });
+  const nextTime = restoredState ? restoredState.time : 0;
+  cancelScheduledFrame();
+  try {
+    const probe = document.createElement('canvas');
+    probe.width = 160; probe.height = 160;
+    const probeContext = probe.getContext('2d');
+    if (!probeContext) throw new Error('Canvas rendering is unavailable.');
+    renderScene(probeContext, cart.genome, nextTime, nextView);
+    renderScene(ctx, cart.genome, nextTime, nextView);
+  } catch (error) {
+    if (CART) {
+      try { renderScene(ctx, CART.genome, MOTION.time, VIEW); }
+      catch (restoreError) {
+        throw new Error(`Could not render this cartridge, and the previous scene could not be restored: ${restoreError.message || restoreError}`);
+      }
+      invalidateRender();
+    }
+    throw new Error(`Could not render this cartridge: ${error.message || error}`);
+  }
   CART = cart;
   CURRENT_GENOME_ID = got;
   clearShareArtifacts();
@@ -876,24 +959,19 @@ async function loadCart(input, sequence = beginLoad(), options = {}) {
   document.getElementById('cart-json').value = serialized;
   canvas.setAttribute('aria-label', description);
   document.title = pageTitle;
-  if (restoredState) {
-    Object.assign(VIEW, restoredState.view, { dragging: false, activePointer: null });
-    MOTION.time = restoredState.time;
-  } else {
-    VIEW.autoOrbit = 0;
-    VIEW.userMoved = false;
-  }
+  Object.assign(VIEW, nextView);
+  MOTION.time = nextTime;
   setPlayerStatus(`Loaded ${cart.title || 'organism'}.`);
-  startAnim({ resetTime: !restoredState });
-  return { id: got, declared, match, trust };
+  startAnim({ resetTime: false, initialRendered: true });
+  return { id: got, contentId, declared, match, trust };
 }
 
-function startAnim({ resetTime = true } = {}) {
+function startAnim({ resetTime = true, initialRendered = false } = {}) {
   cancelScheduledFrame();
   if (resetTime) MOTION.time = 0;
   MOTION.genomeMoves = genomeHasMotion(CART.genome);
   updateMotionButton();
-  invalidateRender();
+  if (!initialRendered || animationActive()) invalidateRender();
 }
 
 motionToggleEl.addEventListener('click', () => {
@@ -961,16 +1039,61 @@ async function loadFromUrl(input, sequence) {
 }
 
 let registryPromise = null;
+function validateRegistry(registry) {
+  if (!registry || registry.schema !== 'hologram-registry/1.0' ||
+      registry.canonicalization !== 'rapp-canonical-json/1' || !Array.isArray(registry.entries) ||
+      !registry.entries.length || registry.entries.length > 256)
+    throw new Error('Registry is malformed.');
+  const aliases = new Set(), hashes = new Set();
+  for (const entry of registry.entries) {
+    if (!entry || typeof entry !== 'object' ||
+        !['name', 'id', 'pin_path', 'content_sha256'].every(key => typeof entry[key] === 'string'))
+      throw new Error('Registry entry is malformed.');
+    if (!/^[0-9a-f]{64}$/.test(entry.content_sha256))
+      throw new Error(`Registry entry "${entry.name}" has an invalid content hash.`);
+    const pin = new URL(entry.pin_path, location.href);
+    if (pin.origin !== location.origin || !/^https?:$/.test(pin.protocol))
+      throw new Error(`Registry entry "${entry.name}" has an unsafe path.`);
+    for (const alias of new Set([entry.name, entry.id])) {
+      if (aliases.has(alias)) throw new Error('Registry names and ids must share one unique alias namespace.');
+      aliases.add(alias);
+    }
+    if (hashes.has(entry.content_sha256))
+      throw new Error('Registry content hashes must be unique.');
+    hashes.add(entry.content_sha256);
+  }
+  if (!registry.summary || registry.summary.cartridges !== registry.entries.length)
+    throw new Error('Registry summary does not match its entries.');
+  return registry;
+}
+
 function getRegistry() {
   if (!registryPromise) {
-    registryPromise = fetch('registry.json', { cache: 'no-store' }).then(async response => {
+    const controller = new AbortController();
+    activeRegistryController = controller;
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, LOAD_TIMEOUT_MS);
+    registryPromise = (async () => {
+      const response = await fetch('registry.json', {
+        cache: 'no-store',
+        signal: controller.signal,
+        credentials: 'same-origin',
+        referrerPolicy: 'no-referrer'
+      });
       if (!response.ok) throw new Error(`Registry returned HTTP ${response.status}.`);
-      const registry = await response.json();
-      if (!registry || !Array.isArray(registry.entries)) throw new Error('Registry is malformed.');
-      return registry;
-    }).catch(error => {
+      const text = await readBounded(response, MAX_REGISTRY_BYTES, 'Registry');
+      let registry;
+      try { registry = JSON.parse(text); }
+      catch (error) { throw new Error(`Registry JSON is invalid: ${error.message}`); }
+      return validateRegistry(registry);
+    })().catch(error => {
       registryPromise = null;
+      if (error.name === 'AbortError')
+        throw new Error(timedOut ? 'Registry request timed out after 15 seconds.' : 'Registry request was replaced by a newer load.');
       throw error;
+    }).finally(() => {
+      clearTimeout(timer);
+      if (activeRegistryController === controller) activeRegistryController = null;
     });
   }
   return registryPromise;
@@ -1011,7 +1134,7 @@ async function resolveAndLoad(input) {
   let cart;
   setPlayerStatus('Loading cartridge...');
   try {
-    if (input.replace(/^\uFEFF/, '').startsWith('{')) cart = JSON.parse(input.replace(/^\uFEFF/, ''));
+    if (input.replace(/^\uFEFF/, '').startsWith('{')) cart = parseCartridgeText(input);
     else cart = await loadFromUrl(input, sequence);
     if (!cart || sequence !== LOAD_SEQUENCE) return;
     await loadCart(cart, sequence);
@@ -1042,7 +1165,7 @@ async function resolveAndLoad(input) {
     bootError = 'The shared egg fragment is empty.';
 
   if (!bootError && hashPresent) {
-    try { cart = JSON.parse(b64dec(hash)); }
+    try { cart = parseCartridgeFragment(hash); }
     catch (error) { bootError = `Shared egg link is invalid: ${error.message}`; }
   }
   if (!bootError && !cart && cartParams.length) {
@@ -1107,7 +1230,7 @@ document.getElementById('cart-url').addEventListener('keydown', e => { if(e.key=
 document.getElementById('btn-apply').onclick = async () => {
   const sequence = beginLoad();
   try {
-    const cart = JSON.parse(document.getElementById('cart-json').value.replace(/^\uFEFF/, ''));
+    const cart = parseCartridgeText(document.getElementById('cart-json').value);
     await loadCart(cart, sequence);
   } catch (error) {
     if (sequence === LOAD_SEQUENCE) setPlayerStatus(error.message || String(error), true);
@@ -1161,7 +1284,7 @@ document.getElementById('file-in').onchange = async e => {
   const sequence = beginLoad();
   try {
     if (f.size > MAX_CART_BYTES) throw new Error('Cartridge exceeds the 2 MiB limit.');
-    const cart = JSON.parse((await f.text()).replace(/^\uFEFF/, ''));
+    const cart = parseCartridgeText(await f.text());
     await loadCart(cart, sequence);
   } catch(error) {
     if (sequence === LOAD_SEQUENCE) setPlayerStatus(error.message || String(error), true);
@@ -1270,7 +1393,7 @@ document.getElementById('canvas').addEventListener('drop', async e => {
   const sequence = beginLoad();
   try {
     if (f.size > MAX_CART_BYTES) throw new Error('Cartridge exceeds the 2 MiB limit.');
-    await loadCart(JSON.parse((await f.text()).replace(/^\uFEFF/, '')), sequence);
+    await loadCart(parseCartridgeText(await f.text()), sequence);
   } catch(error) {
     if (sequence === LOAD_SEQUENCE) setPlayerStatus(error.message || String(error), true);
   }
@@ -1328,7 +1451,7 @@ async function handleIncomingCartridge(message, send) {
       send({ type: 'error', version: PROTOCOL_VERSION, loadId: message.loadId, message: 'Load was superseded by a newer cartridge.' });
       return;
     }
-    send({ type: 'rendered', version: PROTOCOL_VERSION, loadId: message.loadId, id: result.id, declared: result.declared, match: result.match, trust: result.trust });
+    send({ type: 'rendered', version: PROTOCOL_VERSION, loadId: message.loadId, id: result.id, contentId: result.contentId, declared: result.declared, match: result.match, trust: result.trust });
     if (result.match) send({ type: 'hatched', version: PROTOCOL_VERSION, id: result.id, trust: result.trust });
     else send({ type: 'hash-mismatch', version: PROTOCOL_VERSION, got: result.id, declared: result.declared });
   } catch (error) {

@@ -12,7 +12,7 @@ An `.egg` is a [`hologram-cartridge/1.0`](https://github.com/kody-w/rapp-static-
 
 ## Use it
 
-- **The loader** (`index.html`): drop an `.egg` anywhere on the page, pick a file, paste JSON, or load a URL — then **unload** and load another. Five example eggs (different sources + species) are built in.
+- **The loader** (`index.html`): drop an `.egg` anywhere on the page, pick a file, paste JSON, or load a URL — then **unload** and load another. Six example eggs are built in. Deliberately opened specimens enter a content-addressed local Field Journal with search, pin, reopen, remove, and clear controls; automatic startup never counts as a discovery.
 - **Embed the player** directly, no loader needed:
   - `player.html?id=moon` for a bundled, registry-verified specimen
   - `player.html?cart=<url-to-an-egg>`
@@ -28,6 +28,10 @@ Copy-link and QR actions use registry URLs bound to the complete cartridge hash 
 
 Animation pauses while hidden or offscreen, preserves its logical clock when resumed, and honors live `prefers-reduced-motion` changes. Manual orbit and zoom continue to redraw in reduced-motion or paused mode.
 
+## Content identity
+
+Genome IDs and registry content hashes use `rapp-canonical-json/1`: object keys sort by UTF-16 code units, while strings and finite numbers use ECMAScript `JSON.stringify` serialization. Non-JSON values, non-finite numbers, and malformed Unicode are rejected. [`canonical-vectors.json`](canonical-vectors.json) provides canonical bytes and SHA-256 golden vectors for producers in other runtimes.
+
 ## Make eggs
 
 Any `hologram-cartridge/1.0` works. Capture, breed, and export them in the cabinet:
@@ -38,6 +42,7 @@ Any `hologram-cartridge/1.0` works. Capture, breed, and export them in the cabin
 - `player.html` — the universal 3D Lantern (hand-written software-3D, self-contained, no CDN).
 - `index.html` — the load/unload-any-`.egg` UI.
 - `registry.json` — content-hashed catalog for stable bundled-specimen permalinks.
+- `canonical-vectors.json` — cross-runtime golden vectors for `rapp-canonical-json/1`.
 - `qr.mjs` — local QR encoder used by the share UI.
 - `eggs/*.egg` — deliberately-diverse examples plus the built-in Lumina fallback.
 

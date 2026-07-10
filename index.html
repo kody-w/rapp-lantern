@@ -28,6 +28,16 @@
  .eggs{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 2px}
  .eggs .egg{border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:12.5px;background:var(--panel);cursor:pointer}
  .eggs .egg:hover{border-color:var(--accent2)}
+ .journal{margin-top:20px;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:14px}
+ .journal-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+ .journal-head h2{font-size:16px;margin:0}.journal-head .count{font-size:12px;color:var(--muted)}
+ .journal-head input{margin-left:auto;max-width:240px}
+ .journal-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:9px}
+ .specimen-card{border:1px solid var(--line);border-radius:10px;background:#0a1018;padding:10px;min-width:0}
+ .specimen-card h3{font-size:13px;margin:0 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .specimen-card p{font-size:11px;color:var(--muted);margin:0 0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .specimen-card .card-actions{display:flex;gap:5px;flex-wrap:wrap}.specimen-card button{font-size:11px;padding:5px 8px}
+ .journal-empty{color:var(--muted);font-size:12px;margin:4px 0}
  .label{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:16px 0 6px}
  .status{color:var(--muted);font-size:12.5px;min-height:18px;margin-top:8px}
  .status.err{color:#ff8080}
@@ -65,6 +75,17 @@
  <div class="label">example eggs — different sources, different species</div>
  <div class="eggs" id="eggs"></div>
 
+ <section class="journal" aria-labelledby="journal-title">
+  <div class="journal-head">
+   <h2 id="journal-title">Field journal</h2>
+   <span class="count" id="journal-count">0 saved</span>
+   <input type="text" id="journal-search" aria-label="Search saved specimens" placeholder="Search specimens">
+   <button id="journal-clear" disabled>Clear journal</button>
+  </div>
+  <div id="journal-status" class="status" role="status" aria-live="polite"></div>
+  <div id="journal-grid" class="journal-grid"></div>
+ </section>
+
  <details>
   <summary>Paste an egg &amp; the format</summary>
   <textarea id="paste" placeholder='paste a hologram-cartridge/1.0 JSON here'></textarea>
@@ -82,9 +103,13 @@ const MAX_CART_BYTES = 2 * 1024 * 1024;
 const LOAD_TIMEOUT_MS = 15000;
 const PROTOCOL_VERSION = 1;
 const FALLBACK_CART = {"schema":"hologram-cartridge/1.0","id":"d45a79d29e99","title":"Lumina","author":"@kody-w","born":{"coord":"0,0","from":"genesis"},"parents":[],"genome":{"layers":[{"role":"form","k":30,"shape":"blob","limbs":0,"segments":8,"symmetry":"radial","body_r":0.3,"limb_len":0},{"role":"surface","k":85,"palette":["#00ccff","#0088ff","#ffffff","#aaddff"],"pattern":"glow","glow":0.8,"opacity":0.85},{"role":"motion","k":60,"breathe":0.2,"drift":0.5,"pulse":0.8,"reach":0}],"compose":{"windows":[[0,1,2]],"loop":true}},"sig":""};
+const JOURNAL_DB = 'rapp-lantern';
+const JOURNAL_STORE = 'specimens';
+const JOURNAL_RECENT_LIMIT = 8;
 let loadSequence = 0, activeFetch = null;
 let playerPort = null, playerReady = null;
 let confirmedCart = null;
+let journalDbPromise = null;
 const pendingPlayerLoads = new Map();
 
 function status(message, error = false) {
@@ -92,6 +117,24 @@ function status(message, error = false) {
   el.textContent = message || '';
   el.className = 'status' + (error ? ' err' : '');
   el.setAttribute('role', error ? 'alert' : 'status');
+}
+
+function parseEggText(text) {
+  const clean = String(text).replace(/^\uFEFF/, '');
+  if (new TextEncoder().encode(clean).byteLength > MAX_CART_BYTES)
+    throw new Error('Cartridge exceeds the 2 MiB limit.');
+  return JSON.parse(clean);
+}
+
+function hasWellFormedUnicode(value) {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(++index);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+    } else if (code >= 0xdc00 && code <= 0xdfff) return false;
+  }
+  return true;
 }
 
 function validateEgg(obj) {
@@ -102,7 +145,11 @@ function validateEgg(obj) {
   const inspect = (value, depth) => {
     if (depth > 32) throw new Error('Cartridge nesting is too deep.');
     const type = typeof value;
-    if (value === null || type === 'string' || type === 'boolean') return;
+    if (type === 'string') {
+      if (!hasWellFormedUnicode(value)) throw new Error('Cartridge strings must contain valid Unicode.');
+      return;
+    }
+    if (value === null || type === 'boolean') return;
     if (type === 'number' && !Number.isFinite(value))
       throw new Error('Cartridge numbers must be finite.');
     if (type === 'number') return;
@@ -112,7 +159,14 @@ function validateEgg(obj) {
     if (stack.has(value)) throw new Error('Cartridge data cannot contain cycles.');
     if (++nodes > 100000) throw new Error('Cartridge is too complex.');
     stack.add(value);
-    for (const child of Array.isArray(value) ? value : Object.values(value)) inspect(child, depth + 1);
+    if (Array.isArray(value)) {
+      for (const child of value) inspect(child, depth + 1);
+    } else {
+      for (const [key, child] of Object.entries(value)) {
+        if (!hasWellFormedUnicode(key)) throw new Error('Cartridge keys must contain valid Unicode.');
+        inspect(child, depth + 1);
+      }
+    }
     stack.delete(value);
   };
   inspect(obj, 0);
@@ -130,7 +184,14 @@ function validateEgg(obj) {
   if (obj.parents != null && (!Array.isArray(obj.parents) || obj.parents.length > 128 ||
       obj.parents.some(parent => typeof parent !== 'string')))
     throw new Error('Cartridge parents must be an array of strings.');
-  const layers = obj.genome && obj.genome.layers;
+  if (!obj.genome || Object.prototype.toString.call(obj.genome) !== '[object Object]')
+    throw new Error('Cartridge genome must be an object.');
+  const compose = obj.genome.compose;
+  if (compose != null && Object.prototype.toString.call(compose) !== '[object Object]')
+    throw new Error('Genome compose must be an object.');
+  if (compose && compose.loop != null && typeof compose.loop !== 'boolean')
+    throw new Error('Genome compose.loop must be boolean.');
+  const layers = obj.genome.layers;
   if (!Array.isArray(layers) || !layers.length || layers.length > 128)
     throw new Error('Genome layers must contain between 1 and 128 entries.');
   const numericKeys = new Set(['k', 'limbs', 'segments', 'body_r', 'limb_len', 'spikes', 'glow', 'opacity', 'breathe', 'drift', 'pulse', 'reach']);
@@ -167,19 +228,204 @@ function validateEgg(obj) {
       for (const key of ['breathe', 'drift', 'pulse', 'reach']) inRange(key, 0, 1);
     }
   }
-  const windows = obj.genome.compose && obj.genome.compose.windows;
+  if (!layers.some(layer => layer.role === 'form') || !layers.some(layer => layer.role === 'surface'))
+    throw new Error('Genome needs at least one form and one surface layer.');
+  const windows = compose && compose.windows;
   if (windows != null) {
-    if (!Array.isArray(windows) || windows.length > 32)
-      throw new Error('Genome windows must be an array with at most 32 entries.');
+    if (!Array.isArray(windows) || !windows.length || windows.length > 32)
+      throw new Error('Genome windows must contain between 1 and 32 entries.');
     let refs = 0;
     for (const windowLayers of windows) {
-      if (!Array.isArray(windowLayers)) throw new Error('Each genome window must be an array.');
+      if (!Array.isArray(windowLayers) || !windowLayers.length)
+        throw new Error('Each genome window must reference at least one layer.');
       refs += windowLayers.length;
       if (refs > 4096 || windowLayers.some(index => !Number.isInteger(index) || index < 0 || index >= layers.length))
         throw new Error('Genome windows contain invalid layer references.');
     }
+  } else if (compose && compose.loop != null) {
+    throw new Error('Genome compose.loop requires windows.');
   }
   return obj;
+}
+
+function journalStatus(message, error = false) {
+  const element = $('journal-status');
+  element.textContent = message || '';
+  element.className = 'status' + (error ? ' err' : '');
+}
+
+function openJournal() {
+  if (journalDbPromise) return journalDbPromise;
+  journalDbPromise = new Promise((resolve, reject) => {
+    if (!window.indexedDB) {
+      reject(new Error('Local journal storage is unavailable.'));
+      return;
+    }
+    const request = window.indexedDB.open(JOURNAL_DB, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(JOURNAL_STORE))
+        db.createObjectStore(JOURNAL_STORE, { keyPath: 'contentId' });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('Could not open the field journal.'));
+  }).catch(error => {
+    journalDbPromise = null;
+    throw error;
+  });
+  return journalDbPromise;
+}
+
+function journalRequest(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('Journal request failed.'));
+  });
+}
+
+function journalTransaction(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error || new Error('Journal transaction failed.'));
+    transaction.onabort = () => reject(transaction.error || new Error('Journal transaction was aborted.'));
+  });
+}
+
+async function allSpecimens() {
+  const db = await openJournal();
+  return journalRequest(db.transaction(JOURNAL_STORE).objectStore(JOURNAL_STORE).getAll());
+}
+
+function enforceJournalRetention(store) {
+  const request = store.getAll();
+  request.onsuccess = () => {
+    const overflow = request.result.filter(record => !record.pinned)
+      .sort((a, b) => b.lastOpenedAt - a.lastOpenedAt)
+      .slice(JOURNAL_RECENT_LIMIT);
+    for (const record of overflow) store.delete(record.contentId);
+  };
+}
+
+async function saveSpecimen(cart, result, focusTarget = null) {
+  if (!result.contentId) throw new Error('Player did not return a cartridge content id.');
+  const db = await openJournal();
+  const now = Date.now();
+  const transaction = db.transaction(JOURNAL_STORE, 'readwrite');
+  const store = transaction.objectStore(JOURNAL_STORE);
+  const existingRequest = store.get(result.contentId);
+  existingRequest.onsuccess = () => {
+    const existing = existingRequest.result;
+    store.put({
+      contentId: result.contentId,
+      declaredId: result.declared || '',
+      title: cart.title || 'Untitled organism',
+      author: cart.author || '',
+      trust: result.trust,
+      cart,
+      pinned: Boolean(existing && existing.pinned),
+      addedAt: existing ? existing.addedAt : now,
+      lastOpenedAt: now,
+      opens: (existing ? existing.opens : 0) + 1
+    });
+    enforceJournalRetention(store);
+  };
+  await journalTransaction(transaction);
+  await refreshJournal(focusTarget);
+}
+
+async function updateSpecimen(contentId, update, focusAction = null) {
+  const db = await openJournal();
+  const transaction = db.transaction(JOURNAL_STORE, 'readwrite');
+  const store = transaction.objectStore(JOURNAL_STORE);
+  const request = store.get(contentId);
+  request.onsuccess = () => {
+    if (request.result) {
+      store.put({ ...request.result, ...update });
+      enforceJournalRetention(store);
+    }
+  };
+  await journalTransaction(transaction);
+  await refreshJournal(focusAction ? { contentId, action: focusAction } : null);
+}
+
+async function removeSpecimen(contentId) {
+  const db = await openJournal();
+  const transaction = db.transaction(JOURNAL_STORE, 'readwrite');
+  transaction.objectStore(JOURNAL_STORE).delete(contentId);
+  await journalTransaction(transaction);
+  await refreshJournal({ contentId, action: 'remove' });
+}
+
+async function clearJournal() {
+  const db = await openJournal();
+  const transaction = db.transaction(JOURNAL_STORE, 'readwrite');
+  transaction.objectStore(JOURNAL_STORE).clear();
+  await journalTransaction(transaction);
+  await refreshJournal();
+}
+
+function specimenCard(record, focusCandidates) {
+  const card = document.createElement('article');
+  card.className = 'specimen-card';
+  const title = document.createElement('h3');
+  title.textContent = (record.pinned ? '★ ' : '') + record.title;
+  const details = document.createElement('p');
+  details.textContent = `${record.author || 'unknown author'} · ${record.trust || 'unclaimed'} · opened ${record.opens || 1}×`;
+  const actions = document.createElement('div');
+  actions.className = 'card-actions';
+  const open = document.createElement('button');
+  open.textContent = 'Open';
+  open.onclick = async () => {
+    try {
+      const result = await loadEgg(record.cart, record.title, undefined, { collect: false });
+      if (result) await saveSpecimen(record.cart, result, { contentId: record.contentId, action: 'open' });
+    } catch (error) {
+      journalStatus(error.message || String(error), true);
+    }
+  };
+  const pin = document.createElement('button');
+  pin.textContent = record.pinned ? 'Unpin' : 'Pin';
+  pin.onclick = () => updateSpecimen(record.contentId, { pinned: !record.pinned }, 'pin')
+    .catch(error => journalStatus(error.message, true));
+  const remove = document.createElement('button');
+  remove.textContent = 'Remove';
+  remove.onclick = () => removeSpecimen(record.contentId)
+    .catch(error => journalStatus(error.message, true));
+  focusCandidates.set(`${record.contentId}:open`, open);
+  focusCandidates.set(`${record.contentId}:pin`, pin);
+  actions.append(open, pin, remove);
+  card.append(title, details, actions);
+  return card;
+}
+
+async function refreshJournal(focusTarget = null) {
+  try {
+    const records = await allSpecimens();
+    const query = $('journal-search').value.trim().toLowerCase();
+    const visible = records.filter(record =>
+      !query || `${record.title} ${record.author} ${record.contentId}`.toLowerCase().includes(query))
+      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastOpenedAt - a.lastOpenedAt);
+    $('journal-count').textContent = `${records.length} saved`;
+    $('journal-clear').disabled = records.length === 0;
+    const grid = $('journal-grid');
+    const focusCandidates = new Map();
+    grid.replaceChildren();
+    if (!visible.length) {
+      const empty = document.createElement('p');
+      empty.className = 'journal-empty';
+      empty.textContent = records.length ? 'No saved specimens match.' : 'Deliberately open an example or load an .egg to save it here.';
+      grid.appendChild(empty);
+    } else {
+      for (const record of visible) grid.appendChild(specimenCard(record, focusCandidates));
+    }
+    journalStatus('');
+    if (focusTarget) {
+      const target = focusCandidates.get(`${focusTarget.contentId}:${focusTarget.action}`);
+      (target || $('journal-search')).focus();
+    }
+  } catch (error) {
+    journalStatus(error.message || String(error), true);
+  }
 }
 
 function restoreConfirmedPlayer() {
@@ -334,7 +580,7 @@ async function renderEgg(obj, sequence) {
   return rendered;
 }
 
-async function loadEgg(obj, name, sequence = beginLoad()) {
+async function loadEgg(obj, name, sequence = beginLoad(), options = {}) {
   stage.setAttribute('aria-busy', 'true');
   status('Hatching egg...');
   try {
@@ -350,7 +596,9 @@ async function loadEgg(obj, name, sequence = beginLoad()) {
     const trust = result.trust === 'verified' ? 'genome ID verified' :
       (result.trust === 'unclaimed' ? 'unclaimed genome' : 'rendered as a remix');
     status(`Loaded ${cart.title || name || 'organism'} (${trust}) — drag, use the view controls, or press the arrow keys.`);
-    return true;
+    if (options.collect !== false)
+      saveSpecimen(cart, result).catch(error => journalStatus(error.message || String(error), true));
+    return result;
   } catch (error) {
     if (sequence === loadSequence) {
       restoreConfirmedPlayer();
@@ -380,9 +628,9 @@ async function loadFile(file) {
   }
   status('Reading egg...');
   try {
-    const text = (await file.text()).replace(/^\uFEFF/, '');
+    const text = await file.text();
     if (sequence !== loadSequence) return;
-    await loadEgg(JSON.parse(text), file.name.replace(/\.(egg|json)$/i, ''), sequence);
+    await loadEgg(parseEggText(text), file.name.replace(/\.(egg|json)$/i, ''), sequence);
   } catch (error) {
     if (sequence === loadSequence) status(`Could not read that egg: ${error.message}`, true);
   }
@@ -400,7 +648,7 @@ drop.addEventListener('keydown', event => {
 });
 $('loadpaste').onclick = async () => {
   const sequence = beginLoad();
-  try { await loadEgg(JSON.parse($('paste').value.replace(/^\uFEFF/, '')), 'pasted', sequence); }
+  try { await loadEgg(parseEggText($('paste').value), 'pasted', sequence); }
   catch (error) { if (sequence === loadSequence) status(`That is not valid JSON: ${error.message}`, true); }
 };
 $('loadurl').onclick = async () => {
@@ -429,6 +677,7 @@ const EGGS = [
   ['🌔 the moon', 'moon.egg'],
   ['🧬 crossbred hybrid', 'cross-ushuaia-dubai.egg'],
   ['🕷️ original (box-species)', 'original-frenzy.egg'],
+  ['✨ Lumina (genesis)', 'lumina.egg'],
 ];
 const eggsEl = $('eggs');
 for (const [label, file] of EGGS) {
@@ -445,15 +694,21 @@ for (const [label, file] of EGGS) {
   };
   eggsEl.appendChild(b);
 }
+$('journal-search').addEventListener('input', () => refreshJournal());
+$('journal-clear').onclick = () => {
+  if (!window.confirm('Clear every saved specimen from this browser?')) return;
+  clearJournal().catch(error => journalStatus(error.message || String(error), true));
+};
+refreshJournal();
 // auto-load one so the lantern is never empty on first visit
 (async () => {
   const sequence = beginLoad();
   try {
     const cart = await fetchEgg('eggs/' + EGGS[0][1], sequence);
-    if (cart) await loadEgg(cart, EGGS[0][0], sequence);
+    if (cart) await loadEgg(cart, EGGS[0][0], sequence, { collect: false });
   } catch (error) {
     if (sequence !== loadSequence) return;
-    const loaded = await loadEgg(FALLBACK_CART, 'Lumina', sequence);
+    const loaded = await loadEgg(FALLBACK_CART, 'Lumina', sequence, { collect: false });
     if (loaded && sequence === loadSequence)
       status(`Could not load the example egg; showing the built-in organism. ${error.message}`, true);
   }
