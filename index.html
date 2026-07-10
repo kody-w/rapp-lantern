@@ -80,8 +80,11 @@ const $ = id => document.getElementById(id);
 const iframe = $('player'), drop = $('drop'), stage = document.querySelector('.stage');
 const MAX_CART_BYTES = 2 * 1024 * 1024;
 const LOAD_TIMEOUT_MS = 15000;
+const PROTOCOL_VERSION = 1;
+const FALLBACK_CART = {"schema":"hologram-cartridge/1.0","id":"d45a79d29e99","title":"Lumina","author":"@kody-w","born":{"coord":"0,0","from":"genesis"},"parents":[],"genome":{"layers":[{"role":"form","k":30,"shape":"blob","limbs":0,"segments":8,"symmetry":"radial","body_r":0.3,"limb_len":0},{"role":"surface","k":85,"palette":["#00ccff","#0088ff","#ffffff","#aaddff"],"pattern":"glow","glow":0.8,"opacity":0.85},{"role":"motion","k":60,"breathe":0.2,"drift":0.5,"pulse":0.8,"reach":0}],"compose":{"windows":[[0,1,2]],"loop":true}},"sig":""};
 let loadSequence = 0, activeFetch = null;
 let playerPort = null, playerReady = null;
+let confirmedCart = null;
 const pendingPlayerLoads = new Map();
 
 function status(message, error = false) {
@@ -98,9 +101,14 @@ function validateEgg(obj) {
   const stack = new WeakSet();
   const inspect = (value, depth) => {
     if (depth > 32) throw new Error('Cartridge nesting is too deep.');
-    if (typeof value === 'number' && !Number.isFinite(value))
+    const type = typeof value;
+    if (value === null || type === 'string' || type === 'boolean') return;
+    if (type === 'number' && !Number.isFinite(value))
       throw new Error('Cartridge numbers must be finite.');
-    if (!value || typeof value !== 'object') return;
+    if (type === 'number') return;
+    if (type !== 'object') throw new Error('Cartridge data must contain only JSON values.');
+    if (!Array.isArray(value) && Object.prototype.toString.call(value) !== '[object Object]')
+      throw new Error('Cartridge objects must be plain JSON objects.');
     if (stack.has(value)) throw new Error('Cartridge data cannot contain cycles.');
     if (++nodes > 100000) throw new Error('Cartridge is too complex.');
     stack.add(value);
@@ -113,6 +121,15 @@ function validateEgg(obj) {
     throw new Error('Cartridge exceeds the 2 MiB limit.');
   if (obj.schema !== 'hologram-cartridge/1.0')
     throw new Error('Expected schema hologram-cartridge/1.0.');
+  for (const key of ['id', 'title', 'author', 'sig']) {
+    if (obj[key] != null && typeof obj[key] !== 'string')
+      throw new Error(`Cartridge ${key} must be a string.`);
+  }
+  if (obj.id && (obj.id.length > 256 || /[\u0000-\u001f]/.test(obj.id)))
+    throw new Error('Cartridge id is invalid.');
+  if (obj.parents != null && (!Array.isArray(obj.parents) || obj.parents.length > 128 ||
+      obj.parents.some(parent => typeof parent !== 'string')))
+    throw new Error('Cartridge parents must be an array of strings.');
   const layers = obj.genome && obj.genome.layers;
   if (!Array.isArray(layers) || !layers.length || layers.length > 128)
     throw new Error('Genome layers must contain between 1 and 128 entries.');
@@ -144,10 +161,28 @@ function validateEgg(obj) {
   return obj;
 }
 
-function beginLoad() {
+function restoreConfirmedPlayer() {
+  if (!playerPort || !confirmedCart) return;
+  playerPort.postMessage({
+    type: 'load-cartridge',
+    version: PROTOCOL_VERSION,
+    loadId: `restore-${loadSequence}`,
+    cart: confirmedCart
+  });
+}
+
+function cancelPendingPlayerLoads(message = 'Load was cancelled.', restore = true) {
+  if (playerPort) playerPort.postMessage({ type: 'cancel-loads', version: PROTOCOL_VERSION });
+  for (const pending of pendingPlayerLoads.values()) pending.reject(new Error(message));
+  pendingPlayerLoads.clear();
+  if (restore) restoreConfirmedPlayer();
+}
+
+function beginLoad({ restore = true } = {}) {
   loadSequence += 1;
   if (activeFetch) activeFetch.abort();
   activeFetch = null;
+  cancelPendingPlayerLoads('Load was replaced by a newer request.', restore);
   return loadSequence;
 }
 
@@ -208,7 +243,15 @@ async function fetchEgg(input, sequence) {
 function handlePlayerMessage(event, readyResolve, readyReject) {
   const message = event.data || {};
   if (message.type === 'ready') {
+    if (message.version !== PROTOCOL_VERSION) {
+      readyReject(new Error(`Unsupported player protocol version: ${message.version || 'unknown'}.`));
+      return;
+    }
     readyResolve();
+    return;
+  }
+  if (message.type === 'protocol-error') {
+    readyReject(new Error(message.message || 'The player rejected this protocol version.'));
     return;
   }
   if (!message.loadId) return;
@@ -225,12 +268,14 @@ function ensurePlayer() {
   playerReady = new Promise((resolve, reject) => {
     const channel = new MessageChannel();
     let settled = false;
-    const timer = setTimeout(() => {
+    const finishError = error => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       playerReady = null;
-      reject(new Error('The hologram player did not start.'));
-    }, LOAD_TIMEOUT_MS);
+      reject(error);
+    };
+    const timer = setTimeout(() => finishError(new Error('The hologram player did not start.')), LOAD_TIMEOUT_MS);
     const finishReady = () => {
       if (settled) return;
       settled = true;
@@ -238,11 +283,11 @@ function ensurePlayer() {
       resolve();
     };
     playerPort = channel.port1;
-    playerPort.onmessage = event => handlePlayerMessage(event, finishReady, reject);
+    playerPort.onmessage = event => handlePlayerMessage(event, finishReady, finishError);
     playerPort.start && playerPort.start();
     iframe.addEventListener('load', () => {
       const targetOrigin = location.origin === 'null' ? '*' : location.origin;
-      iframe.contentWindow.postMessage({ type: 'hologram-init' }, targetOrigin, [channel.port2]);
+      iframe.contentWindow.postMessage({ type: 'hologram-init', version: PROTOCOL_VERSION }, targetOrigin, [channel.port2]);
     }, { once: true });
     iframe.src = 'player.html?embed=1';
   });
@@ -263,7 +308,7 @@ async function renderEgg(obj, sequence) {
       reject: error => { clearTimeout(timer); reject(error); }
     });
   });
-  playerPort.postMessage({ type: 'load-cartridge', loadId, cart: obj });
+  playerPort.postMessage({ type: 'load-cartridge', version: PROTOCOL_VERSION, loadId, cart: obj });
   return rendered;
 }
 
@@ -276,14 +321,19 @@ async function loadEgg(obj, name, sequence = beginLoad()) {
     if (!result || sequence !== loadSequence) return false;
     iframe.style.display = 'block';
     drop.style.display = 'none';
+    confirmedCart = cart;
     $('title').textContent = cart.title || name || 'organism';
     $('born').textContent = (cart.born && cart.born.from) ? '· ' + cart.born.from : '';
     $('unload').disabled = false;
-    const trust = result.match ? 'verified' : 'rendered as a remix';
+    const trust = result.trust === 'verified' ? 'genome ID verified' :
+      (result.trust === 'unclaimed' ? 'unclaimed genome' : 'rendered as a remix');
     status(`Loaded ${cart.title || name || 'organism'} (${trust}) — drag, use the view controls, or press the arrow keys.`);
     return true;
   } catch (error) {
-    if (sequence === loadSequence) status(error.message || String(error), true);
+    if (sequence === loadSequence) {
+      restoreConfirmedPlayer();
+      status(error.message || String(error), true);
+    }
     return false;
   } finally {
     if (sequence === loadSequence) stage.setAttribute('aria-busy', 'false');
@@ -291,9 +341,13 @@ async function loadEgg(obj, name, sequence = beginLoad()) {
 }
 
 function unload() {
+  beginLoad({ restore: false });
+  if (playerPort) playerPort.postMessage({ type: 'dispose', version: PROTOCOL_VERSION });
   iframe.src = 'about:blank'; iframe.style.display = 'none'; drop.style.display = 'flex';
   playerPort && playerPort.close();
   playerPort = null; playerReady = null;
+  confirmedCart = null;
+  stage.setAttribute('aria-busy', 'false');
   $('title').textContent = ''; $('born').textContent = ''; $('unload').disabled = true; status('');
 }
 async function loadFile(file) {
@@ -377,16 +431,9 @@ for (const [label, file] of EGGS) {
     if (cart) await loadEgg(cart, EGGS[0][0], sequence);
   } catch (error) {
     if (sequence !== loadSequence) return;
-    try {
-      await ensurePlayer();
-      iframe.style.display = 'block'; drop.style.display = 'none';
-      $('title').textContent = 'Lumina';
-      $('born').textContent = '· built-in fallback';
-      $('unload').disabled = false;
+    const loaded = await loadEgg(FALLBACK_CART, 'Lumina', sequence);
+    if (loaded && sequence === loadSequence)
       status(`Could not load the example egg; showing the built-in organism. ${error.message}`, true);
-    } catch (playerError) {
-      status(playerError.message || String(playerError), true);
-    }
   }
 })();
 </script>

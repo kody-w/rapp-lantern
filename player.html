@@ -47,6 +47,10 @@
  #qr-wrap{margin-top:10px;width:100%;max-width:480px;text-align:center}
  canvas.qr{border-radius:8px;background:#fff;image-rendering:pixelated;display:inline-block}
  #qr-link{word-break:break-all;font-size:10.5px;color:#8b949e;margin-top:4px}
+ #share-fallback{width:100%;max-width:480px;margin-top:8px}
+ #share-fallback[hidden]{display:none}
+ #share-fallback label{display:block;font-size:11px;color:#8b949e;margin-bottom:4px}
+ #share-url{width:100%;background:#010409;border:1px solid #30363d;border-radius:7px;color:#e6edf3;padding:7px 9px;font:12px ui-monospace,Menlo,monospace}
  .err{color:#f85149}
  @media(min-width:700px){
   #wrap{flex-direction:row;align-items:flex-start;gap:24px;flex-wrap:wrap}
@@ -116,6 +120,10 @@
   <div id="qr-wrap" style="display:none">
    <canvas class="qr" id="qr"></canvas>
    <div id="qr-link" class="mono"></div>
+  </div>
+  <div id="share-fallback" hidden>
+   <label for="share-url">Share link — copy manually</label>
+   <input id="share-url" readonly>
   </div>
  </div>
 </div>
@@ -469,16 +477,17 @@ async function sha256hex(str) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2,'0')).join('');
 }
+function canonicalJson(value) {
+  if (Array.isArray(value)) return '[' + value.map(canonicalJson).join(',') + ']';
+  if (value !== null && typeof value === 'object')
+    return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + canonicalJson(value[key])).join(',') + '}';
+  return JSON.stringify(value);
+}
 async function genomeId(genome) {
   // Matches build.py: json.dumps(genome, sort_keys=True, separators=(',',':'))
-  function canonical(v) {
-    if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']';
-    if (v !== null && typeof v === 'object')
-      return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}';
-    return JSON.stringify(v);
-  }
-  return (await sha256hex(canonical(genome))).slice(0, 12);
+  return (await sha256hex(canonicalJson(genome))).slice(0, 12);
 }
+async function cartridgeContentId(cart) { return sha256hex(canonicalJson(cart)); }
 
 /* ── Base64url helpers ────────────────────────────────────────────────────── */
 function b64enc(s) { return btoa(unescape(encodeURIComponent(s))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
@@ -487,6 +496,8 @@ function b64dec(s) { s = String(s).replace(/-/g,'+').replace(/_/g,'/'); while(s.
 /* ── Bounded cartridge gate ──────────────────────────────────────────────── */
 const MAX_CART_BYTES = 2 * 1024 * 1024;
 const LOAD_TIMEOUT_MS = 15000;
+const MAX_INLINE_URL_BYTES = 12000;
+const PROTOCOL_VERSION = 1;
 
 function validateCartridge(cart) {
   if (!cart || typeof cart !== 'object' || Array.isArray(cart))
@@ -495,9 +506,14 @@ function validateCartridge(cart) {
   const stack = new WeakSet();
   const inspect = (value, depth) => {
     if (depth > 32) throw new Error('Cartridge nesting is too deep.');
-    if (typeof value === 'number' && !Number.isFinite(value))
+    const type = typeof value;
+    if (value === null || type === 'string' || type === 'boolean') return;
+    if (type === 'number' && !Number.isFinite(value))
       throw new Error('Cartridge numbers must be finite.');
-    if (!value || typeof value !== 'object') return;
+    if (type === 'number') return;
+    if (type !== 'object') throw new Error('Cartridge data must contain only JSON values.');
+    if (!Array.isArray(value) && Object.prototype.toString.call(value) !== '[object Object]')
+      throw new Error('Cartridge objects must be plain JSON objects.');
     if (stack.has(value)) throw new Error('Cartridge data cannot contain cycles.');
     if (++nodes > 100000) throw new Error('Cartridge is too complex.');
     stack.add(value);
@@ -510,6 +526,15 @@ function validateCartridge(cart) {
     throw new Error('Cartridge exceeds the 2 MiB limit.');
   if (cart.schema !== 'hologram-cartridge/1.0')
     throw new Error('Expected schema hologram-cartridge/1.0.');
+  for (const key of ['id', 'title', 'author', 'sig']) {
+    if (cart[key] != null && typeof cart[key] !== 'string')
+      throw new Error(`Cartridge ${key} must be a string.`);
+  }
+  if (cart.id && (cart.id.length > 256 || /[\u0000-\u001f]/.test(cart.id)))
+    throw new Error('Cartridge id is invalid.');
+  if (cart.parents != null && (!Array.isArray(cart.parents) || cart.parents.length > 128 ||
+      cart.parents.some(parent => typeof parent !== 'string')))
+    throw new Error('Cartridge parents must be an array of strings.');
   const layers = cart.genome && cart.genome.layers;
   if (!Array.isArray(layers) || !layers.length || layers.length > 128)
     throw new Error('Genome layers must contain between 1 and 128 entries.');
@@ -587,6 +612,13 @@ function setPlayerStatus(message, error = false) {
   playerStatusEl.setAttribute('role', error ? 'alert' : 'status');
 }
 
+function clearShareArtifacts() {
+  document.getElementById('qr-wrap').style.display = 'none';
+  document.getElementById('qr-link').textContent = '';
+  document.getElementById('share-fallback').hidden = true;
+  document.getElementById('share-url').value = '';
+}
+
 function beginLoad() {
   LOAD_SEQUENCE += 1;
   if (activeFetch) activeFetch.abort();
@@ -632,13 +664,18 @@ async function loadCart(input, sequence = beginLoad()) {
   const got = await genomeId(cart.genome);
   if (sequence !== LOAD_SEQUENCE) return null;
   const declared = cart.id || '';
-  const match = !declared || got === declared;
+  const trust = !declared ? 'unclaimed' : (got === declared ? 'verified' : 'mismatch');
+  const match = trust !== 'mismatch';
+  const serialized = JSON.stringify(cart, null, 2);
+  const description = describeCartridge(cart, got, match);
+  const pageTitle = `${cart.title || 'hologram'} — rapp-lantern`;
   CART = cart;
+  clearShareArtifacts();
   verEl.style.display = 'block';
-  if (declared && match) {
+  if (trust === 'verified') {
     verEl.textContent = got + ' ✓';
     verEl.className = 'mono';
-  } else if (!declared) {
+  } else if (trust === 'unclaimed') {
     verEl.textContent = got + ' (computed)';
     verEl.className = 'mono';
   } else {
@@ -650,14 +687,14 @@ async function loadCart(input, sequence = beginLoad()) {
   titleEl.style.color = '';
   document.getElementById('i-author').textContent = cart.author || '';
   document.getElementById('i-id').textContent = 'id:' + (cart.id || got);
-  document.getElementById('cart-json').value = JSON.stringify(cart, null, 2);
-  canvas.setAttribute('aria-label', describeCartridge(cart, got, match));
-  document.title = `${cart.title || 'hologram'} — rapp-lantern`;
+  document.getElementById('cart-json').value = serialized;
+  canvas.setAttribute('aria-label', description);
+  document.title = pageTitle;
   VIEW.autoOrbit = 0;
   VIEW.userMoved = false;
   setPlayerStatus(`Loaded ${cart.title || 'organism'}.`);
   startAnim();
-  return { id: got, declared, match };
+  return { id: got, declared, match, trust };
 }
 
 function startAnim() {
@@ -705,6 +742,50 @@ async function loadFromUrl(input, sequence) {
   }
 }
 
+let registryPromise = null;
+function getRegistry() {
+  if (!registryPromise) {
+    registryPromise = fetch('registry.json', { cache: 'no-store' }).then(async response => {
+      if (!response.ok) throw new Error(`Registry returned HTTP ${response.status}.`);
+      const registry = await response.json();
+      if (!registry || !Array.isArray(registry.entries)) throw new Error('Registry is malformed.');
+      return registry;
+    }).catch(error => {
+      registryPromise = null;
+      throw error;
+    });
+  }
+  return registryPromise;
+}
+
+async function makeShareUrl() {
+  if (!CART) throw new Error('Load an egg before sharing.');
+  const cart = CART;
+  const contentId = await cartridgeContentId(cart);
+  if (CART !== cart) throw new Error('The organism changed while preparing its link.');
+  let registry = null;
+  try {
+    registry = await getRegistry();
+  } catch (error) {
+    if (CART !== cart) throw new Error('The organism changed while preparing its link.');
+    setPlayerStatus(`Registry lookup unavailable; using a self-contained link. ${error.message}`);
+  }
+  if (CART !== cart) throw new Error('The organism changed while preparing its link.');
+  const entry = registry && registry.entries.find(item => item.content_sha256 === contentId);
+  if (entry) {
+    const url = new URL('player.html', location.href);
+    url.searchParams.set('id', entry.name);
+    url.searchParams.set('h', contentId);
+    if (CART !== cart) throw new Error('The organism changed while preparing its link.');
+    return url.href;
+  }
+  const url = new URL('player.html#' + b64enc(JSON.stringify(cart)), location.href).href;
+  if (new TextEncoder().encode(url).byteLength > MAX_INLINE_URL_BYTES)
+    throw new Error('This egg is too large for a reliable link. Download and send the .egg instead.');
+  if (CART !== cart) throw new Error('The organism changed while preparing its link.');
+  return url;
+}
+
 async function resolveAndLoad(input) {
   input = (input || '').trim();
   if (!input) return;
@@ -726,6 +807,7 @@ async function resolveAndLoad(input) {
 (async () => {
   const p = new URLSearchParams(location.search);
   const hash = (location.hash || '').slice(1);
+  const bootSequence = beginLoad();
   let cart = null, bootError = '';
 
   if (hash) {
@@ -733,30 +815,46 @@ async function resolveAndLoad(input) {
     catch (error) { bootError = `Shared egg link is invalid: ${error.message}`; }
   }
   if (!cart && p.has('cart')) {
-    const sequence = beginLoad();
-    try { cart = await loadFromUrl(p.get('cart'), sequence); }
-    catch (error) { bootError = error.message || String(error); }
+    try { cart = await loadFromUrl(p.get('cart'), bootSequence); }
+    catch (error) {
+      if (bootSequence !== LOAD_SEQUENCE) return;
+      bootError = error.message || String(error);
+    }
   }
   if (!cart && p.has('id')) {
     try {
-      const response = await fetch('registry.json', { cache: 'no-store' });
-      if (!response.ok) throw new Error(`Registry returned HTTP ${response.status}.`);
-      const reg = await response.json();
+      const reg = await getRegistry();
+      if (bootSequence !== LOAD_SEQUENCE) return;
       const entry = (reg.entries || []).find(e => e.name === p.get('id') || e.id === p.get('id'));
       if (!entry) throw new Error(`No registry entry matches "${p.get('id')}".`);
-      const sequence = beginLoad();
-      cart = await loadFromUrl(new URL(entry.pin_path, location.href).href, sequence);
-    } catch (error) { bootError = error.message || String(error); }
+      const expectedContentId = p.get('h') && p.get('h').toLowerCase();
+      if (expectedContentId && !/^[0-9a-f]{64}$/i.test(expectedContentId))
+        throw new Error('The registry content hash in this link is invalid.');
+      if (expectedContentId && expectedContentId !== entry.content_sha256)
+        throw new Error(`Registry entry "${entry.name}" no longer matches this shared link.`);
+      cart = await loadFromUrl(new URL(entry.pin_path, location.href).href, bootSequence);
+      if (bootSequence !== LOAD_SEQUENCE) return;
+      const actualContentId = await cartridgeContentId(cart);
+      if (actualContentId !== entry.content_sha256 || (expectedContentId && actualContentId !== expectedContentId))
+        throw new Error(`Registry content check failed for "${entry.name}".`);
+    } catch (error) {
+      if (bootSequence !== LOAD_SEQUENCE) return;
+      cart = null;
+      bootError = error.message || String(error);
+    }
   }
+  if (bootSequence !== LOAD_SEQUENCE) return;
   if (!cart) cart = DEFAULT_CART;
 
   try {
-    await loadCart(cart);
+    await loadCart(cart, bootSequence);
   } catch (error) {
+    if (bootSequence !== LOAD_SEQUENCE) return;
     bootError = error.message || String(error);
-    if (cart !== DEFAULT_CART) await loadCart(DEFAULT_CART);
+    if (cart !== DEFAULT_CART) await loadCart(DEFAULT_CART, bootSequence);
   }
-  if (bootError) setPlayerStatus(`${bootError} Showing the built-in organism instead.`, true);
+  if (bootSequence === LOAD_SEQUENCE && bootError)
+    setPlayerStatus(`${bootError} Showing the built-in organism instead.`, true);
 })();
 
 /* ── Controls ─────────────────────────────────────────────────────────────── */
@@ -784,16 +882,34 @@ document.getElementById('btn-dl').onclick = () => {
 
 document.getElementById('btn-link').onclick = async () => {
   if (!CART) return;
-  const url = new URL('player.html#' + b64enc(JSON.stringify(CART)), location.href).href;
   const btn = document.getElementById('btn-link');
+  const cart = CART;
+  let url;
+  try {
+    url = await makeShareUrl();
+    if (CART !== cart) throw new Error('The organism changed while preparing its link.');
+  } catch (error) {
+    if (CART !== cart) return;
+    setPlayerStatus(error.message || String(error), true);
+    return;
+  }
   try {
     if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('Clipboard access is unavailable.');
     await navigator.clipboard.writeText(url);
+    if (CART !== cart) return;
+    document.getElementById('share-fallback').hidden = true;
     btn.textContent = 'copied ✓';
     setPlayerStatus('Share link copied.');
     setTimeout(() => btn.textContent = 'copy link', 1400);
   } catch (error) {
-    setPlayerStatus(error.message || String(error), true);
+    if (CART !== cart) return;
+    const fallback = document.getElementById('share-fallback');
+    const input = document.getElementById('share-url');
+    input.value = url;
+    fallback.hidden = false;
+    input.focus();
+    input.select();
+    setPlayerStatus('Clipboard access failed. The share link is selected for manual copy.', true);
   }
 };
 
@@ -920,16 +1036,30 @@ document.getElementById('canvas').addEventListener('drop', async e => {
 let qrMod = null;
 document.getElementById('btn-qr').onclick = async () => {
   if (!CART) return;
+  const cart = CART;
   const wrap = document.getElementById('qr-wrap');
   if (wrap.style.display === 'block') { wrap.style.display = 'none'; return; }
   if (!qrMod) {
-    try { qrMod = await import('../track/qr.mjs'); } catch {
-      try { qrMod = await import('./qr.mjs'); } catch { alert('QR module unavailable'); return; }
+    try { qrMod = await import('./qr.mjs'); }
+    catch (error) {
+      if (CART !== cart) return;
+      setPlayerStatus(`QR module unavailable: ${error.message}`, true);
+      return;
     }
   }
-  const url = new URL('player.html#' + b64enc(JSON.stringify(CART)), location.href).href;
-  const { qr } = qrMod;
-  const { size, modules } = qr(url, { ecl: 'M' });
+  if (CART !== cart) return;
+  let url, code;
+  try {
+    url = await makeShareUrl();
+    if (CART !== cart) throw new Error('The organism changed while preparing its QR code.');
+    code = qrMod.qr(url, { ecl: 'M' });
+  } catch (error) {
+    if (CART !== cart) return;
+    setPlayerStatus(error.message || String(error), true);
+    return;
+  }
+  if (CART !== cart) return;
+  const { size, modules } = code;
   const q = 4, scale = Math.max(2, Math.floor(240 / (size + 2 * q))), dim = (size + 2 * q) * scale;
   const qc = document.getElementById('qr'); qc.width = dim; qc.height = dim;
   const qx = qc.getContext('2d');
@@ -939,6 +1069,7 @@ document.getElementById('btn-qr').onclick = async () => {
     if (modules[y][x]) qx.fillRect((x+q)*scale, (y+q)*scale, scale, scale);
   document.getElementById('qr-link').textContent = url;
   wrap.style.display = 'block';
+  setPlayerStatus('QR code ready to scan.');
 };
 
 /* ── postMessage housing protocol ────────────────────────────────────────── */
@@ -950,38 +1081,79 @@ async function handleIncomingCartridge(message, send) {
   try {
     const result = await loadCart(message.cart);
     if (!result) {
-      send({ type: 'error', loadId: message.loadId, message: 'Load was superseded by a newer cartridge.' });
+      send({ type: 'error', version: PROTOCOL_VERSION, loadId: message.loadId, message: 'Load was superseded by a newer cartridge.' });
       return;
     }
-    send({ type: 'rendered', loadId: message.loadId, id: result.id, declared: result.declared, match: result.match });
-    if (result.match) send({ type: 'hatched', id: result.id });
-    else send({ type: 'hash-mismatch', got: result.id, declared: result.declared });
+    send({ type: 'rendered', version: PROTOCOL_VERSION, loadId: message.loadId, id: result.id, declared: result.declared, match: result.match, trust: result.trust });
+    if (result.match) send({ type: 'hatched', version: PROTOCOL_VERSION, id: result.id, trust: result.trust });
+    else send({ type: 'hash-mismatch', version: PROTOCOL_VERSION, got: result.id, declared: result.declared });
   } catch (error) {
     const messageText = error.message || String(error);
     setPlayerStatus(messageText, true);
-    send({ type: 'error', loadId: message.loadId, message: messageText });
+    send({ type: 'error', version: PROTOCOL_VERSION, loadId: message.loadId, message: messageText });
+  }
+}
+
+function handleProtocolMessage(message, send, dispose) {
+  const version = message.version == null ? PROTOCOL_VERSION : message.version;
+  if (version !== PROTOCOL_VERSION) {
+    send({ type: 'protocol-error', version: PROTOCOL_VERSION, message: `Unsupported protocol version: ${version}.` });
+    return;
+  }
+  if (message.type === 'cancel-loads') {
+    beginLoad();
+    send({ type: 'cancelled', version: PROTOCOL_VERSION });
+    return;
+  }
+  if (message.type === 'dispose') {
+    beginLoad();
+    if (RAF) cancelAnimationFrame(RAF);
+    RAF = null;
+    send({ type: 'disposed', version: PROTOCOL_VERSION });
+    dispose && dispose();
+    return;
+  }
+  if (message.type === 'load-cartridge' && message.cart) {
+    handleIncomingCartridge(message, send);
   }
 }
 
 window.addEventListener('message', e => {
   if (e.source !== window.parent || !e.data) return;
   if (e.data.type === 'hologram-init') {
-    _pmPort = e.ports[0] || null;
-    if (!_pmPort) return;
-    _pmPort.onmessage = event => {
-      const message = event.data;
-      if (message && message.type === 'load-cartridge' && message.cart)
-        handleIncomingCartridge(message, response => _pmPort.postMessage(response));
+    const port = e.ports[0] || null;
+    if (!port) return;
+    const version = e.data.version == null ? PROTOCOL_VERSION : e.data.version;
+    if (version !== PROTOCOL_VERSION) {
+      port.postMessage({ type: 'protocol-error', version: PROTOCOL_VERSION, message: `Unsupported protocol version: ${version}.` });
+      port.close();
+      return;
+    }
+    if (_pmPort) {
+      beginLoad();
+      _pmPort.onmessage = null;
+      _pmPort.close();
+    }
+    _pmPort = port;
+    const send = response => port.postMessage(response);
+    const dispose = () => {
+      if (_pmPort === port) _pmPort = null;
+      port.onmessage = null;
+      port.close();
     };
-    _pmPort.start && _pmPort.start();
-    _pmPort.postMessage({ type: 'ready' });
+    port.onmessage = event => {
+      if (event.data) handleProtocolMessage(event.data, send, dispose);
+    };
+    port.start && port.start();
+    port.postMessage({
+      type: 'ready',
+      version: PROTOCOL_VERSION,
+      capabilities: ['load-cartridge', 'cancel-loads', 'dispose', 'transactional-render']
+    });
     return;
   }
-  const sameOrigin = e.origin === location.origin || (location.origin === 'null' && e.origin === 'null');
-  if (!sameOrigin) return;
-  if (e.data.type === 'load-cartridge' && e.data.cart) {
-    const targetOrigin = e.origin === 'null' ? '*' : e.origin;
-    handleIncomingCartridge(e.data, response => e.source.postMessage(response, targetOrigin));
-  }
+  const targetOrigin = e.origin === 'null' ? '*' : e.origin;
+  const send = response => e.source.postMessage(response, targetOrigin);
+  handleProtocolMessage(e.data, send);
 });
 </script></body></html>
