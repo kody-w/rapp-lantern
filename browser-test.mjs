@@ -35,7 +35,7 @@ const engineName = process.env.BROWSER || 'chromium';
 const engine = engines[engineName];
 assert.ok(engine, `Unknown browser: ${engineName}`);
 const browser = await engine.launch({ headless: true });
-const page = await browser.newPage();
+const page = await browser.newPage({ viewport: { width: 320, height: 568 }, hasTouch: true });
 const errors = [];
 page.on('pageerror', error => errors.push(error));
 page.on('console', message => {
@@ -45,7 +45,6 @@ page.on('requestfailed', request => errors.push(new Error(`request failed: ${req
 const base = `http://127.0.0.1:${server.address().port}`;
 
 try {
-  await page.setViewportSize({ width: 320, height: 568 });
   await page.goto(`${base}/index.html`);
   await page.locator('#title').filter({ hasText: 'Huila sky' }).waitFor();
   await page.locator('#share-dock:not([hidden])').waitFor();
@@ -68,8 +67,18 @@ try {
     /disabled|Timeout/
   );
 
+  await page.setViewportSize({ width: 120, height: 120 });
+  await page.goto(`${base}/player.html?embed=1#`);
+  await page.locator('#embed-error:not([hidden])').waitFor();
+  assert.equal(await page.locator('#view-controls').isVisible(), false);
+  assert.equal(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    true
+  );
+
   const registry = JSON.parse(fs.readFileSync(path.join(root, 'registry.json'), 'utf8'));
   const moon = registry.entries.find(entry => entry.name === 'moon');
+  await page.setViewportSize({ width: 320, height: 568 });
   await page.goto(`${base}/player.html?id=moon&h=${moon.content_sha256}`);
   await page.locator('#i-title').filter({ hasText: "Tonight's Moon" }).waitFor();
   assert.equal(await page.locator('#btn-dl').isEnabled(), true);

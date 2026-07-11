@@ -20,6 +20,8 @@
  #orbit-hint.hide{opacity:0}
  #verify{position:absolute;top:8px;right:10px;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-family:ui-monospace,Menlo,monospace;color:#3fb950;background:rgba(1,4,9,0.75);padding:2px 7px;border-radius:20px;pointer-events:none}
  #verify.mismatch{color:#f0b429}
+ #embed-error{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;padding:18px;text-align:center;color:#ff9b9b;background:rgba(1,4,9,.94);font-size:13px;font-weight:700;overflow-wrap:anywhere;overflow:auto}
+ #embed-error[hidden]{display:none}
  #view-controls{position:absolute;left:10px;bottom:10px;display:flex;gap:8px;align-items:flex-end}
  #view-controls .dpad{display:grid;grid-template-columns:repeat(3,44px);grid-template-rows:repeat(3,44px);gap:3px}
  #view-controls .zoom{display:flex;flex-direction:column;gap:4px}
@@ -40,7 +42,8 @@
  #load-row{width:100%;max-width:480px;margin-top:10px;display:flex;gap:6px}
  #load-row input{flex:1;background:#010409;border:1px solid #30363d;border-radius:7px;color:#e6edf3;padding:5px 9px;font:inherit;font-size:12px}
  #info-row{width:100%;max-width:480px;margin-top:8px;font-size:11px;color:#8b949e;display:flex;gap:14px;flex-wrap:wrap}
- #player-status{width:100%;max-width:480px;min-height:18px;margin-top:6px;font-size:11px;color:#8b949e}
+ #title,#i-title,#i-author,#i-id{min-width:0;max-width:100%;overflow-wrap:anywhere}
+ #player-status{width:100%;max-width:480px;min-height:18px;margin-top:6px;font-size:11px;color:#8b949e;overflow-wrap:anywhere}
  #player-status.err{color:#f85149}
  #json-area{width:100%;max-width:480px;margin-top:12px}
  #json-area textarea{width:100%;min-height:120px;background:#010409;border:1px solid #30363d;border-radius:8px;color:#e6edf3;padding:8px;font-family:ui-monospace,Menlo,monospace;font-size:11px;resize:vertical}
@@ -77,6 +80,9 @@
   #view-controls .dpad{display:none}
   #view-controls .zoom{flex-direction:row}
  }
+ @media(max-width:180px),(max-height:140px){
+  #view-controls,#orbit-hint{display:none}
+ }
 </style></head><body>
 <main id="wrap">
  <div id="header">
@@ -88,6 +94,7 @@
   <canvas id="canvas" width="480" height="480" tabindex="0" role="img" aria-label="Interactive 3D organism. Use arrow keys to orbit, plus and minus to zoom, and Home to reset the view."></canvas>
   <div id="orbit-hint">drag or use controls</div>
   <div id="verify" style="display:none"></div>
+  <div id="embed-error" role="alert" aria-live="assertive" aria-atomic="true" hidden></div>
   <div id="view-controls" role="group" aria-label="Organism view controls">
    <div class="dpad">
     <button id="view-up" data-view="up" aria-label="Orbit up">↑</button>
@@ -122,7 +129,7 @@
    <span id="i-author"></span>
    <span id="i-id" class="mono"></span>
   </div>
-  <div id="player-status" role="status" aria-live="polite"></div>
+  <div id="player-status" role="status" aria-live="polite" aria-atomic="true"></div>
   <div id="json-area">
    <textarea id="cart-json" aria-label="Cartridge JSON" spellcheck="false" placeholder="paste hologram-cartridge/1.0 JSON here…"></textarea>
    <div class="row">
@@ -847,9 +854,10 @@ const MOTION = {
 };
 
 function setPlayerStatus(message, error = false) {
-  playerStatusEl.textContent = message || '';
   playerStatusEl.className = error ? 'err' : '';
   playerStatusEl.setAttribute('role', error ? 'alert' : 'status');
+  playerStatusEl.setAttribute('aria-live', error ? 'assertive' : 'polite');
+  playerStatusEl.textContent = message || '';
 }
 
 function clearShareArtifacts() {
@@ -884,6 +892,11 @@ function showSourceError(message) {
   document.getElementById('i-title').style.color = '#f85149';
   document.getElementById('i-author').textContent = '';
   document.getElementById('i-id').textContent = '';
+  const embedError = document.getElementById('embed-error');
+  embedError.textContent = message;
+  embedError.hidden = !document.documentElement.classList.contains('embed');
+  document.getElementById('view-controls').style.display = 'none';
+  orbitHintEl.style.display = 'none';
   canvas.setAttribute('aria-label', `Hologram unavailable. ${message}`);
   ctx.fillStyle = '#010409';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -1062,6 +1075,9 @@ async function loadCart(input, sequence = beginLoad(), options = {}) {
   CART = cart;
   CURRENT_GENOME_ID = got;
   CURRENT_CONTENT_ID = contentId;
+  document.getElementById('embed-error').hidden = true;
+  document.getElementById('view-controls').style.display = '';
+  orbitHintEl.style.display = '';
   clearShareArtifacts();
   setOutputActionsEnabled(true);
   updateJournalHandoff(cart);
@@ -1160,6 +1176,8 @@ async function loadFromUrl(input, sequence) {
   } catch (error) {
     if (error.name === 'AbortError')
       throw new Error(timedOut ? 'Cartridge request timed out after 15 seconds.' : 'Cartridge request was replaced by a newer load.');
+    if (error instanceof TypeError)
+      throw new Error('Could not fetch that cartridge. Use an HTTPS URL whose server allows cross-origin (CORS) access.');
     throw error;
   } finally {
     clearTimeout(timer);
@@ -1271,14 +1289,17 @@ async function prepareStandaloneShare(contentId) {
     document.getElementById('btn-share').disabled = false;
     document.getElementById('btn-link').title = '';
     document.getElementById('btn-qr').title = '';
-    document.getElementById('btn-qr').disabled =
-      new TextEncoder().encode(url).byteLength > 997;
+    const qrTooLarge = new TextEncoder().encode(url).byteLength > 997;
+    document.getElementById('btn-qr').disabled = qrTooLarge;
+    if (qrTooLarge)
+      setPlayerStatus('Link ready, but QR is too large. Use share, copy link, or download the .egg.');
   } catch (error) {
     if (CURRENT_CONTENT_ID !== contentId) return;
     const message = error.message || String(error);
     document.getElementById('btn-share').disabled = false;
     document.getElementById('btn-link').title = message;
     document.getElementById('btn-qr').title = message;
+    setPlayerStatus(`Link and QR unavailable. Use share or download the .egg. ${message}`, true);
   }
 }
 

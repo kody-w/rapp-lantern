@@ -17,7 +17,7 @@
  #drop .big{font-size:44px;opacity:.8}
  #drop b{color:var(--ink)}
  .meta{display:flex;align-items:baseline;gap:10px;min-height:24px;margin:2px 0 14px;flex-wrap:wrap}
- .meta #title{font-weight:700;font-size:16px} .meta #born{color:var(--muted);font-size:13px} .meta #hint{color:var(--muted);font-size:12px;margin-left:auto}
+ .meta #title{font-weight:700;font-size:16px;max-width:100%;overflow-wrap:anywhere;min-width:0} .meta #born{color:var(--muted);font-size:13px;max-width:100%;overflow-wrap:anywhere} .meta #hint{color:var(--muted);font-size:12px;margin-left:auto}
  .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 12px}
  .share-dock{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin:-3px 0 14px;padding:10px;border:1px solid var(--line);border-radius:11px;background:var(--panel)}
  .share-dock[hidden]{display:none}.share-dock .share-status{flex-basis:100%;margin:0}
@@ -46,7 +46,7 @@
  .specimen-card .card-actions{display:flex;gap:5px;flex-wrap:wrap}.specimen-card button{font-size:11px;padding:5px 8px}
  .journal-empty{color:var(--muted);font-size:12px;margin:4px 0}
  .label{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:16px 0 6px}
- .status{color:var(--muted);font-size:12.5px;min-height:18px;margin-top:8px}
+ .status{color:var(--muted);font-size:12.5px;min-height:18px;margin-top:8px;min-width:0;max-width:100%;overflow-wrap:anywhere}
  .status.err{color:#ff8080}
  details{margin-top:16px;border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:0 14px}
  summary{cursor:pointer;padding:12px 0;color:var(--muted);font-size:13px}
@@ -72,7 +72,7 @@
   <span id="title"></span><span id="born"></span>
   <span id="hint">drag to orbit · click the view, then scroll to zoom</span>
  </div>
- <div class="status" id="status" role="status" aria-live="polite"></div>
+ <div class="status" id="status" role="status" aria-live="polite" aria-atomic="true"></div>
 
  <div class="bar">
   <button class="primary" id="pick">📂 Load .egg…</button>
@@ -87,7 +87,7 @@
   <button id="share-copy" disabled>Copy link</button>
   <button id="share-qr" disabled aria-controls="loader-qr-output" aria-expanded="false">QR</button>
   <button id="share-download">Download .egg</button>
-  <div id="loader-share-status" class="status share-status" role="status" aria-live="polite"></div>
+  <div id="loader-share-status" class="status share-status" role="status" aria-live="polite" aria-atomic="true"></div>
   <div id="loader-copy-output" class="share-output" hidden>
    <input id="loader-share-url" aria-label="Share link" readonly>
   </div>
@@ -108,7 +108,7 @@
    <button id="journal-persist">Protect storage</button>
    <button id="journal-clear" disabled>Clear recents</button>
   </div>
-  <div id="journal-status" class="status" role="status" aria-live="polite"></div>
+  <div id="journal-status" class="status" role="status" aria-live="polite" aria-atomic="true"></div>
   <div id="journal-grid" class="journal-grid"></div>
  </section>
 
@@ -147,15 +147,18 @@ if (journalChannel) journalChannel.onmessage = () => refreshJournal();
 
 function status(message, error = false) {
   const el = $('status');
-  el.textContent = message || '';
   el.className = 'status' + (error ? ' err' : '');
   el.setAttribute('role', error ? 'alert' : 'status');
+  el.setAttribute('aria-live', error ? 'assertive' : 'polite');
+  el.textContent = message || '';
 }
 
 function loaderShareStatus(message, error = false) {
   const element = $('loader-share-status');
-  element.textContent = message || '';
   element.className = 'status share-status' + (error ? ' err' : '');
+  element.setAttribute('role', error ? 'alert' : 'status');
+  element.setAttribute('aria-live', error ? 'assertive' : 'polite');
+  element.textContent = message || '';
 }
 
 function clearLoaderShare() {
@@ -364,8 +367,10 @@ function validateEgg(obj) {
 
 function journalStatus(message, error = false) {
   const element = $('journal-status');
-  element.textContent = message || '';
   element.className = 'status' + (error ? ' err' : '');
+  element.setAttribute('role', error ? 'alert' : 'status');
+  element.setAttribute('aria-live', error ? 'assertive' : 'polite');
+  element.textContent = message || '';
 }
 
 function openJournal() {
@@ -696,6 +701,7 @@ function cancelPendingPlayerLoads(message = 'Load was cancelled.', restore = tru
 
 function beginLoad({ restore = true } = {}) {
   loadSequence += 1;
+  stage.setAttribute('aria-busy', 'false');
   pendingDropSequences.clear();
   if (activeFetch) activeFetch.abort();
   activeFetch = null;
@@ -760,6 +766,8 @@ async function fetchEgg(input, sequence) {
   } catch (error) {
     if (error.name === 'AbortError')
       throw new Error(timedOut ? 'Egg request timed out after 15 seconds.' : 'Egg request was replaced by a newer load.');
+    if (error instanceof TypeError)
+      throw new Error('Could not fetch that egg. Use an HTTPS URL whose server allows cross-origin (CORS) access.');
     throw error;
   } finally {
     clearTimeout(timer);
@@ -997,6 +1005,7 @@ async function loadEgg(obj, name, sequence = beginLoad(), options = {}) {
     $('title').textContent = cart.title || name || 'organism';
     $('born').textContent = (cart.born && cart.born.from) ? '· ' + cart.born.from : '';
     $('unload').disabled = false;
+    if (options.focusPlayer !== false) iframe.focus();
     const trust = result.trust === 'verified' ? 'genome ID verified' :
       (result.trust === 'unclaimed' ? 'unclaimed genome' : 'rendered as a remix');
     status(`Loaded ${cart.title || name || 'organism'} (${trust}) — drag, use the view controls, or press the arrow keys.`);
@@ -1036,6 +1045,7 @@ function unload() {
   clearLoaderShare();
   stage.setAttribute('aria-busy', 'false');
   $('title').textContent = ''; $('born').textContent = ''; $('unload').disabled = true; status('');
+  drop.focus();
 }
 async function loadFile(file) {
   const sequence = beginLoad();
@@ -1254,10 +1264,10 @@ refreshJournal();
   // Keep the ordinary first visit from opening on an empty stage.
   try {
     const cart = await fetchEgg('eggs/' + EGGS[0][1], sequence);
-    if (cart) await loadEgg(cart, EGGS[0][0], sequence, { collect: false });
+    if (cart) await loadEgg(cart, EGGS[0][0], sequence, { collect: false, focusPlayer: false });
   } catch (error) {
     if (sequence !== loadSequence) return;
-    const loaded = await loadEgg(FALLBACK_CART, 'Lumina', sequence, { collect: false });
+    const loaded = await loadEgg(FALLBACK_CART, 'Lumina', sequence, { collect: false, focusPlayer: false });
     if (loaded && sequence === loadSequence)
       status(`Could not load the example egg; showing the built-in organism. ${error.message}`, true);
   }
