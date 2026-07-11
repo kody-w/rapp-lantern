@@ -37,13 +37,15 @@ function loadSection(source, start, end, exports, globals = {}) {
   return context.__exports;
 }
 
-const playerGate = loadSection(
+const playerGateApi = loadSection(
   player,
   'function hasWellFormedUnicode',
   '\n\nasync function readBounded',
-  ['validateCartridge'],
+  ['validateCartridge', 'decodeUtf8Bytes'],
   { MAX_CART_BYTES: 2 * 1024 * 1024 }
-).validateCartridge;
+);
+const playerGate = playerGateApi.validateCartridge;
+const decodeUtf8Bytes = playerGateApi.decodeUtf8Bytes;
 const indexGate = loadSection(
   index,
   'function hasWellFormedUnicode',
@@ -205,6 +207,11 @@ check('both gates reject the same malformed fixtures', () => {
     assert.throws(() => playerGate(structuredClone(fixture)));
     assert.throws(() => indexGate(structuredClone(fixture)));
   }
+});
+
+check('UTF-8 decoding is fatal on malformed byte sequences', () => {
+  assert.equal(decodeUtf8Bytes(Uint8Array.from([0x7b, 0x7d])), '{}');
+  assert.throws(() => decodeUtf8Bytes(Uint8Array.from([0xc3, 0x28])), /not valid UTF-8/);
 });
 
 check('render-cost budget rejects excessive windows', () => {

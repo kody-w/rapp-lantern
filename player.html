@@ -16,9 +16,9 @@
  #canvas{cursor:grab;touch-action:pan-y pinch-zoom}
  #canvas.dragging{cursor:grabbing}
  #canvas:focus-visible{outline:3px solid #58a6ff;outline-offset:3px}
- #orbit-hint{position:absolute;top:10px;left:50%;transform:translateX(-50%);font-size:11px;font-weight:700;letter-spacing:.02em;color:#e6edf3;background:rgba(1,4,9,0.72);border:1px solid rgba(110,118,129,.45);padding:6px 10px;border-radius:999px;pointer-events:none;white-space:nowrap}
+ #orbit-hint{position:absolute;top:42px;left:50%;transform:translateX(-50%);font-size:11px;font-weight:700;letter-spacing:.02em;color:#e6edf3;background:rgba(1,4,9,0.72);border:1px solid rgba(110,118,129,.45);padding:6px 10px;border-radius:999px;pointer-events:none;white-space:nowrap}
  #orbit-hint.hide{opacity:0}
- #verify{position:absolute;bottom:8px;right:10px;font-size:10px;font-family:ui-monospace,Menlo,monospace;color:#3fb950;background:rgba(1,4,9,0.75);padding:2px 7px;border-radius:20px;pointer-events:none}
+ #verify{position:absolute;top:8px;right:10px;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-family:ui-monospace,Menlo,monospace;color:#3fb950;background:rgba(1,4,9,0.75);padding:2px 7px;border-radius:20px;pointer-events:none}
  #verify.mismatch{color:#f0b429}
  #view-controls{position:absolute;left:10px;bottom:10px;display:flex;gap:8px;align-items:flex-end}
  #view-controls .dpad{display:grid;grid-template-columns:repeat(3,44px);grid-template-rows:repeat(3,44px);gap:3px}
@@ -64,10 +64,21 @@
  html.embed #stage{width:100%;height:100%;max-width:none}
  html.embed #canvas{width:100%;height:100%;border:0;border-radius:0}
  @media(max-width:420px){
-  #orbit-hint{top:7px}
+  #verify{top:7px;right:7px}
+  #orbit-hint{top:40px}
+ }
+ @media(max-width:600px){
+  #load-row input,#json-area textarea,#share-url{font-size:16px}
+ }
+ @media(pointer:coarse){
+  #controls button,.button-link,#load-row button,#json-area button{min-height:44px}
+ }
+ @media(max-width:420px) and (max-height:220px){
+  #view-controls .dpad{display:none}
+  #view-controls .zoom{flex-direction:row}
  }
 </style></head><body>
-<div id="wrap">
+<main id="wrap">
  <div id="header">
   <h1 id="title">🌀 hologram</h1>
   <span id="meta" class="mono"></span>
@@ -129,7 +140,7 @@
    <input id="share-url" readonly>
   </div>
  </div>
-</div>
+</main>
 
 <script type="module">
 /* ── Software-3D renderer ─────────────────────────────────────────────────── */
@@ -615,6 +626,11 @@ function parseCartridgeText(text) {
   return JSON.parse(clean);
 }
 
+function decodeUtf8Bytes(bytes, label = 'Cartridge') {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+  catch { throw new Error(`${label} is not valid UTF-8.`); }
+}
+
 function parseCartridgeFragment(fragment) {
   const encoded = String(fragment);
   if (!encoded || !/^[A-Za-z0-9_-]+$/.test(encoded) || encoded.length % 4 === 1)
@@ -777,14 +793,14 @@ async function readBounded(response, maxBytes = MAX_CART_BYTES, label = 'Cartrid
   if (Number.isFinite(declared) && declared > maxBytes)
     throw new Error(`${label} exceeds its size limit.`);
   if (!response.body || !response.body.getReader) {
-    const text = await response.text();
-    if (new TextEncoder().encode(text).byteLength > maxBytes)
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > maxBytes)
       throw new Error(`${label} exceeds its size limit.`);
-    return text;
+    return decodeUtf8Bytes(bytes, label);
   }
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let bytes = 0, text = '';
+  const chunks = [];
+  let bytes = 0;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -793,9 +809,12 @@ async function readBounded(response, maxBytes = MAX_CART_BYTES, label = 'Cartrid
       await reader.cancel();
       throw new Error(`${label} exceeds its size limit.`);
     }
-    text += decoder.decode(value, { stream: true });
+    chunks.push(value);
   }
-  return text + decoder.decode();
+  const merged = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength; }
+  return decodeUtf8Bytes(merged, label);
 }
 
 /* ── Default cartridge (Lumina) ────────────────────────────────────────────── */
@@ -1510,7 +1529,7 @@ document.getElementById('file-in').onchange = async e => {
   const sequence = beginLoad();
   try {
     if (f.size > MAX_CART_BYTES) throw new Error('Cartridge exceeds the 2 MiB limit.');
-    const cart = parseCartridgeText(await f.text());
+    const cart = parseCartridgeText(decodeUtf8Bytes(new Uint8Array(await f.arrayBuffer())));
     await loadCart(cart, sequence);
   } catch(error) {
     if (sequence === LOAD_SEQUENCE) setPlayerStatus(error.message || String(error), true);
@@ -1583,6 +1602,9 @@ canvas.addEventListener('pointerup', event => {
 canvas.addEventListener('pointercancel', event => {
   if (event.pointerId === VIEW.activePointer) orbitUp();
 });
+canvas.addEventListener('lostpointercapture', event => {
+  if (event.pointerId === VIEW.activePointer) orbitUp();
+});
 canvas.addEventListener('wheel', event => {
   if (event.ctrlKey || document.activeElement !== canvas) return;
   event.preventDefault();
@@ -1637,7 +1659,7 @@ document.getElementById('canvas').addEventListener('drop', async e => {
         throw new Error('The embedding page is not ready to receive this egg.');
     }
     if (f.size > MAX_CART_BYTES) throw new Error('Cartridge exceeds the 2 MiB limit.');
-    const cart = parseCartridgeText(await f.text());
+    const cart = parseCartridgeText(decodeUtf8Bytes(new Uint8Array(await f.arrayBuffer())));
     if (!embedded && sequence !== LOAD_SEQUENCE) return;
     if (embedded) {
       postDropToHost({

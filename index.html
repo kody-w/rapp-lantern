@@ -52,9 +52,10 @@
  summary{cursor:pointer;padding:12px 0;color:var(--muted);font-size:13px}
  details p{margin:0 0 12px;color:var(--muted);font-size:13px}
  @media(max-width:600px){input[type=text],textarea{font-size:16px}}
+ @media(pointer:coarse){button,.btn,.eggs .egg{min-height:44px}}
 </style></head>
 <body>
-<div class="wrap">
+<main class="wrap">
  <h1>🔮 rapp-lantern</h1>
  <p class="sub">The universal player. Drop in <b>any</b> holographic organism — an <code>.egg</code> — and orbit it, whatever its source or species. Nothing leaves your device; nothing phones home.</p>
 
@@ -71,6 +72,7 @@
   <span id="title"></span><span id="born"></span>
   <span id="hint">drag to orbit · click the view, then scroll to zoom</span>
  </div>
+ <div class="status" id="status" role="status" aria-live="polite"></div>
 
  <div class="bar">
   <button class="primary" id="pick">📂 Load .egg…</button>
@@ -118,8 +120,7 @@
   <p>An <code>.egg</code> is a <code>hologram-cartridge/1.0</code> JSON — a self-describing, content-addressed organism: a layered genome (form / surface / motion) the player interprets with zero per-species code. It renders in genuine 3D you drag to orbit. Make your own in the <a href="https://kody-w.github.io/rapp-static-apis/hologram/" target="_blank" rel="noopener">cabinet</a>, or convert any source into one.</p>
  </details>
 
- <div class="status" id="status" role="status" aria-live="polite"></div>
-</div>
+</main>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -181,6 +182,11 @@ function parseEggText(text) {
   if (new TextEncoder().encode(clean).byteLength > MAX_CART_BYTES)
     throw new Error('Cartridge exceeds the 2 MiB limit.');
   return JSON.parse(clean);
+}
+
+function decodeUtf8Bytes(bytes, label = 'Cartridge') {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+  catch { throw new Error(`${label} is not valid UTF-8.`); }
 }
 
 function parseKeepFragment(fragment) {
@@ -709,14 +715,14 @@ async function readBounded(response) {
   if (Number.isFinite(declared) && declared > MAX_CART_BYTES)
     throw new Error('Cartridge exceeds the 2 MiB limit.');
   if (!response.body || !response.body.getReader) {
-    const text = await response.text();
-    if (new TextEncoder().encode(text).byteLength > MAX_CART_BYTES)
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > MAX_CART_BYTES)
       throw new Error('Cartridge exceeds the 2 MiB limit.');
-    return text;
+    return decodeUtf8Bytes(bytes);
   }
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let bytes = 0, text = '';
+  const chunks = [];
+  let bytes = 0;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -725,9 +731,12 @@ async function readBounded(response) {
       await reader.cancel();
       throw new Error('Cartridge exceeds the 2 MiB limit.');
     }
-    text += decoder.decode(value, { stream: true });
+    chunks.push(value);
   }
-  return text + decoder.decode();
+  const merged = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength; }
+  return decodeUtf8Bytes(merged);
 }
 
 async function fetchEgg(input, sequence) {
@@ -1036,7 +1045,7 @@ async function loadFile(file) {
   }
   status('Reading egg...');
   try {
-    const text = await file.text();
+    const text = decodeUtf8Bytes(new Uint8Array(await file.arrayBuffer()));
     if (sequence !== loadSequence) return;
     await loadEgg(parseEggText(text), file.name.replace(/\.(egg|json)$/i, ''), sequence);
   } catch (error) {
